@@ -53,17 +53,4 @@ sudo kubeadm init \
   --pod-network-cidr=10.244.0.0/16 \
   --ignore-preflight-errors=all
 
-echo "--- 7. 解决 8080 拒绝连接问题 ---"
-mkdir -p $HOME/.kube
-sudo cp -f /etc/kubernetes/admin.conf $HOME/.kube/config
-sudo chown $(id -u):$(id -g) $HOME/.kube/config
-
-echo "--- 8. 自动化运维配置 ---"
-# 解除污点，让单机也能直接看到 metrics 数据
-kubectl taint nodes --all node-role.kubernetes.io/master- || true
-kubectl taint nodes --all node-role.kubernetes.io/control-plane- || true
-
-# 安装 Flannel 网络
-kubectl apply -f https://raw.githubusercontent.com/flannel-io/flannel/master/Documentation/kube-flannel.yml
-
 echo "--- 安装完成！ ---"
