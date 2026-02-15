@@ -1,10 +1,10 @@
-# 1. 自动创建 n8n 专属命名空间 (解决你遇到的报错)
+# 1. 创建命名空间 (Namespace) - 解决 "not found" 报错
 apiVersion: v1
 kind: Namespace
 metadata:
   name: n8n
 ---
-# 2. 定义持久化存储 (防止边缘机重启后工作流丢失)
+# 2. 持久化存储 (PersistentVolumeClaim) - 确保数据不丢失
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -15,9 +15,9 @@ spec:
     - ReadWriteOnce
   resources:
     requests:
-      storage: 5Gi # 你的磁盘很大，给 5G 存配置绰绰有余
+      storage: 10Gi # 给你充足的空间存储工作流
 ---
-# 3. 部署 n8n 核心程序
+# 3. 部署 n8n (Deployment)
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -41,20 +41,20 @@ spec:
           env:
             - name: N8N_PORT
               value: "5678"
-          # 挂载存储卷到 n8n 的默认数据目录
+          # 挂载高速磁盘路径
           volumeMounts:
             - name: n8n-data
               mountPath: /home/node/.n8n
           resources:
             limits:
-              memory: "4Gi" # 针对你 31G 内存的优化
+              memory: "4Gi" # 针对 31G 内存的优化配额
               cpu: "1000m"
       volumes:
         - name: n8n-data
           persistentVolumeClaim:
             claimName: n8n-pvc
 ---
-# 4. 暴露访问端口 (固定 NodePort)
+# 4. 服务暴露 (Service) - 固定外部访问端口
 apiVersion: v1
 kind: Service
 metadata:
