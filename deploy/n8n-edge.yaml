@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: n8n-edge
+  namespace: n8n
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: n8n
+  template:
+    metadata:
+      labels:
+        app: n8n
+    spec:
+      containers:
+        - name: n8n
+          image: n8nio/n8n:latest
+          ports:
+            - containerPort: 5678
+          resources:
+            limits:
+              memory: "4Gi"  # 你的机器有 31G，给 4G 非常安全
+              cpu: "1000m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: n8n-service
+  namespace: n8n
+spec:
+  type: NodePort
+  ports:
+    - port: 5678
+      targetPort: 5678
+      nodePort: 30078  # 固定端口，以后访问 http://192.168.1.11:30078
+  selector:
+    app: n8n
