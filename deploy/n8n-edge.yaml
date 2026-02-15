@@ -1,3 +1,23 @@
+# 1. 自动创建 n8n 专属命名空间 (解决你遇到的报错)
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: n8n
+---
+# 2. 定义持久化存储 (防止边缘机重启后工作流丢失)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: n8n-pvc
+  namespace: n8n
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi # 你的磁盘很大，给 5G 存配置绰绰有余
+---
+# 3. 部署 n8n 核心程序
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -18,11 +38,23 @@ spec:
           image: n8nio/n8n:latest
           ports:
             - containerPort: 5678
+          env:
+            - name: N8N_PORT
+              value: "5678"
+          # 挂载存储卷到 n8n 的默认数据目录
+          volumeMounts:
+            - name: n8n-data
+              mountPath: /home/node/.n8n
           resources:
             limits:
-              memory: "4Gi"  # 你的机器有 31G，给 4G 非常安全
+              memory: "4Gi" # 针对你 31G 内存的优化
               cpu: "1000m"
+      volumes:
+        - name: n8n-data
+          persistentVolumeClaim:
+            claimName: n8n-pvc
 ---
+# 4. 暴露访问端口 (固定 NodePort)
 apiVersion: v1
 kind: Service
 metadata:
@@ -33,6 +65,6 @@ spec:
   ports:
     - port: 5678
       targetPort: 5678
-      nodePort: 30078  # 固定端口，以后访问 http://192.168.1.11:30078
+      nodePort: 30078 # 以后访问 http://192.168.1.11:30078
   selector:
     app: n8n
