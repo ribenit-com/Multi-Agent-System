@@ -1,10 +1,10 @@
-# 1. 创建命名空间 (Namespace) - 解决 "not found" 报错
+# 1. 强制先创建房间 (解决 Namespace NotFound 问题)
 apiVersion: v1
 kind: Namespace
 metadata:
   name: n8n
 ---
-# 2. 持久化存储 (PersistentVolumeClaim) - 确保数据不丢失
+# 2. 持久化存储 (针对你的高速磁盘)
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
@@ -15,9 +15,9 @@ spec:
     - ReadWriteOnce
   resources:
     requests:
-      storage: 10Gi # 给你充足的空间存储工作流
+      storage: 5Gi
 ---
-# 3. 部署 n8n (Deployment)
+# 3. 部署 n8n 核心
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -38,23 +38,19 @@ spec:
           image: n8nio/n8n:latest
           ports:
             - containerPort: 5678
-          env:
-            - name: N8N_PORT
-              value: "5678"
-          # 挂载高速磁盘路径
+          resources:
+            limits:
+              memory: "4Gi" # 针对 31G 内存的分配
+              cpu: "1000m"
           volumeMounts:
             - name: n8n-data
               mountPath: /home/node/.n8n
-          resources:
-            limits:
-              memory: "4Gi" # 针对 31G 内存的优化配额
-              cpu: "1000m"
       volumes:
         - name: n8n-data
           persistentVolumeClaim:
             claimName: n8n-pvc
 ---
-# 4. 服务暴露 (Service) - 固定外部访问端口
+# 4. 固定外部访问入口
 apiVersion: v1
 kind: Service
 metadata:
@@ -65,6 +61,6 @@ spec:
   ports:
     - port: 5678
       targetPort: 5678
-      nodePort: 30078 # 以后访问 http://192.168.1.11:30078
+      nodePort: 30078 # 访问地址: http://192.168.1.11:30078
   selector:
     app: n8n
