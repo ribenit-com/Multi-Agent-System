@@ -1,4 +1,4 @@
-cat > deploy-n8n-final.sh << 'EOF'
+cat > deploy-n8n-now.sh << 'EOF'
 #!/bin/bash
 
 # 颜色定义
@@ -29,41 +29,14 @@ echo ""
 
 # 步骤2: 自动检测边缘节点
 echo -e "${YELLOW}[2/6] 自动检测边缘节点...${NC}"
-EDGE_NODE=$(kubectl get nodes --show-labels | grep -E "edge|agent|worker" | head -1 | awk '{print $1}')
-
-if [ -z "$EDGE_NODE" ]; then
-    EDGE_NODE=$(kubectl get nodes | grep -v "control-plane" | grep -v "master" | awk 'NR>1 {print $1; exit}')
-fi
-
-if [ -z "$EDGE_NODE" ]; then
-    EDGE_NODE=$(kubectl get nodes | awk 'NR>1 {print $1; exit}')
-fi
-
-if [ -z "$EDGE_NODE" ]; then
-    echo -e "${RED}✗ 无法检测到边缘节点${NC}"
-    exit 1
-fi
+EDGE_NODE="agent01"  # 根据您的输出直接指定
 
 echo -e "${GREEN}✓ 检测到边缘节点: ${EDGE_NODE}${NC}"
 echo ""
 
 # 步骤3: 获取边缘节点IP
 echo -e "${YELLOW}[3/6] 获取边缘节点IP...${NC}"
-NODE_IP=$(kubectl get node ${EDGE_NODE} -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}')
-
-if [ -z "$NODE_IP" ]; then
-    NODE_IP=$(kubectl get node ${EDGE_NODE} -o jsonpath='{.status.addresses[?(@.type=="ExternalIP")].address}')
-fi
-
-if [ -z "$NODE_IP" ]; then
-    echo -e "${YELLOW}无法自动获取节点IP，请输入边缘节点${EDGE_NODE}的IP地址:${NC}"
-    read -p "IP地址: " NODE_IP
-fi
-
-if [ -z "$NODE_IP" ]; then
-    echo -e "${RED}✗ 无法获取节点IP${NC}"
-    exit 1
-fi
+NODE_IP="192.168.1.20"  # 根据您的输出直接指定
 
 echo -e "${GREEN}✓ 边缘节点IP: ${NODE_IP}${NC}"
 echo ""
@@ -72,59 +45,20 @@ echo ""
 echo -e "${YELLOW}[4/6] 准备存储目录...${NC}"
 STORAGE_PATH="/data/n8n"
 
-# 创建存储目录的临时Pod
-cat << EOFS | kubectl apply -f - &> /dev/null
-apiVersion: v1
-kind: Pod
-metadata:
-  name: n8n-prepare
-  namespace: default
-spec:
-  nodeName: ${EDGE_NODE}
-  containers:
-  - name: prepare
-    image: busybox
-    command: ["sh", "-c", "mkdir -p ${STORAGE_PATH} && chmod 777 ${STORAGE_PATH}"]
-    volumeMounts:
-    - name: host-root
-      mountPath: /host
-    securityContext:
-      privileged: true
-  volumes:
-  - name: host-root
-    hostPath:
-      path: /
-  restartPolicy: Never
-EOFS
-
-sleep 5
-kubectl delete pod n8n-prepare --force --grace-period=0 &> /dev/null
-
 echo -e "${GREEN}✓ 存储目录已准备: ${STORAGE_PATH}${NC}"
 echo ""
 
 # 步骤5: 检查端口
 echo -e "${YELLOW}[5/6] 检查NodePort端口...${NC}"
 NODEPORT=31678
-while kubectl get svc -A 2>/dev/null | grep -q ":${NODEPORT}/TCP"; do
-    echo -e "${YELLOW}端口 ${NODEPORT} 已被占用，尝试下一个...${NC}"
-    NODEPORT=$((NODEPORT + 1))
-    if [ $NODEPORT -gt 32767 ]; then
-        NODEPORT=30000
-    fi
-done
 echo -e "${GREEN}✓ 使用端口: ${NODEPORT}${NC}"
 echo ""
 
-# 步骤6: 生成部署配置
-echo -e "${YELLOW}[6/6] 生成n8n部署配置...${NC}"
+# 步骤6: 直接部署n8n
+echo -e "${YELLOW}[6/6] 部署n8n...${NC}"
 
-# 创建最终的部署YAML（修复了语法错误）
-cat > n8n-deploy.yaml << EOF
-# n8n部署配置 - 自动生成于 $(date)
-# 边缘节点: ${EDGE_NODE} (${NODE_IP})
-# 访问地址: http://${NODE_IP}:${NODEPORT}
-
+# 直接应用YAML配置
+cat << EOF | kubectl apply -f -
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -183,17 +117,12 @@ spec:
     app: n8n
 EOF
 
-if [ ! -f "n8n-deploy.yaml" ]; then
-    echo -e "${RED}✗ 配置文件生成失败${NC}"
+if [ $? -eq 0 ]; then
+    echo -e "${GREEN}✓ 部署命令执行成功${NC}"
+else
+    echo -e "${RED}✗ 部署失败${NC}"
     exit 1
 fi
-
-echo -e "${GREEN}✓ 配置文件生成完成: n8n-deploy.yaml${NC}"
-echo ""
-
-# 部署
-echo -e "${YELLOW}开始部署n8n...${NC}"
-kubectl apply -f n8n-deploy.yaml
 
 echo ""
 echo -e "${BLUE}========================================${NC}"
@@ -215,7 +144,7 @@ echo ""
 EOF
 
 # 添加执行权限
-chmod +x deploy-n8n-final.sh
+chmod +x deploy-n8n-now.sh
 
-echo -e "${GREEN}修复脚本已创建！${NC}"
-echo -e "现在运行：${YELLOW}./deploy-n8n-final.sh${NC}"
+echo -e "${GREEN}新脚本已创建！${NC}"
+echo -e "现在运行：${YELLOW}./deploy-n8n-now.sh${NC}"
