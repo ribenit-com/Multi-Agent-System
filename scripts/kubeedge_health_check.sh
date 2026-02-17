@@ -1,7 +1,7 @@
 #!/bin/bash
 # ============================================
-# KubeEdge 集群全面健康检测脚本 (本地版)
-# 版本: 2.1.0
+# KubeEdge 集群全面健康检测脚本 (简化版)
+# 版本: 2.0.1
 # 执行位置: 控制中心
 # 输出: HTML格式健康报告 + 日志，保存到 /tmp
 # ============================================
@@ -9,16 +9,14 @@
 set -euo pipefail
 
 # ================= 配置 =================
-CONTROL_IP="192.168.1.10"
+CONTROL_IP=$(hostname -I | awk '{print $1}')
 NETWORK_PREFIX="192.168.1"
 
-# 本地路径
-LOCAL_PATH="/tmp"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-REPORT_FILE="$LOCAL_PATH/kubeedge-health-report-${TIMESTAMP}.html"
-LOG_FILE="$LOCAL_PATH/kubeedge-health-check-${TIMESTAMP}.log"
+REPORT_FILE="/tmp/kubeedge-health-report-${TIMESTAMP}.html"
+LOG_FILE="/tmp/kubeedge-health-check-${TIMESTAMP}.log"
 
-# 删除同名旧文件（防止重复执行冲突）
+# 删除旧文件
 [ -f "$REPORT_FILE" ] && rm -f "$REPORT_FILE"
 [ -f "$LOG_FILE" ] && rm -f "$LOG_FILE"
 
@@ -44,9 +42,7 @@ log() {
 }
 
 # ================= 开始检测 =================
-log "${BLUE}════════════════════════════════════════════════════════════${NC}"
-log "${BLUE}      KubeEdge 集群全面健康检测 - $(date)${NC}"
-log "${BLUE}════════════════════════════════════════════════════════════${NC}"
+log "${BLUE}════════════════ KubeEdge 健康检测开始 (${TIMESTAMP}) ════════════════${NC}"
 log ""
 
 # ================= 1. 网络健康检查 =================
@@ -54,8 +50,8 @@ log "${YELLOW}[1/5] 网络健康检查${NC}"
 
 # 1.1 网络接口
 log "  检查控制中心网络接口..."
-INTERFACES=$(ip -br addr | grep -v "lo" | wc -l)
-if [ $INTERFACES -gt 0 ]; then
+INTERFACES=$(ip -br addr | grep -v "lo" | wc -l || echo 0)
+if [ "$INTERFACES" -gt 0 ]; then
     log "  ${GREEN}✓${NC} 网络接口正常 (找到 $INTERFACES 个活动接口)"
     PASSED=$((PASSED+1))
     SECTION_HTML+="<tr><td>✅</td><td>控制中心网络接口</td><td>正常 ($INTERFACES 个接口)</td><td>-</td></tr>"
@@ -65,22 +61,19 @@ else
     SECTION_HTML+="<tr><td>❌</td><td>控制中心网络接口</td><td>失败</td><td>未找到活动网络接口</td></tr>"
 fi
 
-# 1.2 扫描网络节点
+# 1.2 网络节点扫描
 log "  扫描网络 ${NETWORK_PREFIX}.0/24..."
 if ! command -v nmap &>/dev/null; then
     log "  ${YELLOW}⚠${NC} nmap 未安装，无法扫描网络节点"
     WARN=$((WARN+1))
-    SECTION_HTML+="<tr><td>⚠️</td><td>网络节点扫描</td><td>未执行</td><td>请安装nmap</td></tr>"
+    SECTION_HTML+="<tr><td>⚠️</td><td>网络节点扫描</td><td>未执行</td><td>请安装 nmap</td></tr>"
 else
     NODE_IPS=$(nmap -sn ${NETWORK_PREFIX}.0/24 2>/dev/null | grep "Nmap scan" | grep -oP '\d+\.\d+\.\d+\.\d+' || echo "")
     NODES_FOUND=$(echo "$NODE_IPS" | wc -w)
-    if [ $NODES_FOUND -gt 1 ]; then
+    if [ "$NODES_FOUND" -gt 1 ]; then
         log "  ${GREEN}✓${NC} 发现 $((NODES_FOUND-1)) 个边缘节点"
         PASSED=$((PASSED+1))
         SECTION_HTML+="<tr><td>✅</td><td>网络节点扫描</td><td>发现 $((NODES_FOUND-1)) 个节点</td><td>-</td></tr>"
-        for IP in $NODE_IPS; do
-            [ "$IP" != "$CONTROL_IP" ] && log "    - 发现边缘节点: $IP"
-        done
     else
         log "  ${YELLOW}⚠${NC} 未发现边缘节点"
         WARN=$((WARN+1))
@@ -106,17 +99,15 @@ log ""
 # ================= 2. 硬件健康检查 =================
 log "${YELLOW}[2/5] 硬件健康检查${NC}"
 
-# CPU
-CPU_CORES=$(nproc)
-CPU_LOAD=$(uptime | awk -F'load average:' '{print $2}')
+CPU_CORES=$(nproc || echo 0)
+CPU_LOAD=$(uptime | awk -F'load average:' '{print $2}' || echo "N/A")
 log "  CPU: $CPU_CORES 核心, 负载:$CPU_LOAD"
-[ $CPU_CORES -gt 0 ] && PASSED=$((PASSED+1))
+[ "$CPU_CORES" -gt 0 ] && PASSED=$((PASSED+1))
 SECTION_HTML+="<tr><td>✅</td><td>CPU</td><td>${CPU_CORES} 核心</td><td>负载: $CPU_LOAD</td></tr>"
 
-# 内存
-MEM_TOTAL=$(free -h | awk '/^Mem:/{print $2}')
-MEM_AVAIL=$(free -h | awk '/^Mem:/{print $7}')
-MEM_USAGE=$(free | awk '/^Mem:/{printf "%.1f", ($3/$2)*100}')
+MEM_TOTAL=$(free -h | awk '/^Mem:/{print $2}' || echo "N/A")
+MEM_AVAIL=$(free -h | awk '/^Mem:/{print $7}' || echo "N/A")
+MEM_USAGE=$(free | awk '/^Mem:/{printf "%.1f", ($3/$2)*100}' || echo "0")
 log "  内存总量: $MEM_TOTAL, 可用: $MEM_AVAIL, 使用率: ${MEM_USAGE}%"
 if (( $(echo "$MEM_USAGE < 80" | bc -l) )); then
     PASSED=$((PASSED+1))
@@ -129,15 +120,14 @@ else
     SECTION_HTML+="<tr><td>❌</td><td>内存</td><td>$MEM_TOTAL</td><td>使用率: ${MEM_USAGE}% (超过警戒)</td></tr>"
 fi
 
-# 磁盘
-DISK_TOTAL=$(df -h / | awk 'NR==2 {print $2}')
-DISK_AVAIL=$(df -h / | awk 'NR==2 {print $4}')
-DISK_USAGE=$(df / | awk 'NR==2 {print $5}' | sed 's/%//')
+DISK_TOTAL=$(df -h / | awk 'NR==2 {print $2}' || echo "N/A")
+DISK_AVAIL=$(df -h / | awk 'NR==2 {print $4}' || echo "N/A")
+DISK_USAGE=$(df / | awk 'NR==2 {print $5}' | sed 's/%//' || echo "0")
 log "  磁盘总量: $DISK_TOTAL, 可用: $DISK_AVAIL, 使用率: ${DISK_USAGE}%"
-if [ $DISK_USAGE -lt 80 ]; then
+if [ "$DISK_USAGE" -lt 80 ]; then
     PASSED=$((PASSED+1))
     SECTION_HTML+="<tr><td>✅</td><td>磁盘</td><td>$DISK_TOTAL</td><td>使用率: $DISK_USAGE%</td></tr>"
-elif [ $DISK_USAGE -lt 90 ]; then
+elif [ "$DISK_USAGE" -lt 90 ]; then
     WARN=$((WARN+1))
     SECTION_HTML+="<tr><td>⚠️</td><td>磁盘</td><td>$DISK_TOTAL</td><td>使用率: $DISK_USAGE% (接近警戒)</td></tr>"
 else
@@ -155,20 +145,20 @@ if [ -f ~/.kube/config ]; then
 else
     log "  ${RED}✗${NC} kubeconfig 文件不存在"
     FAILED=$((FAILED+1))
-    SECTION_HTML+="<tr><td>❌</td><td>kubeconfig</td><td>不存在</td><td>需配置kubectl</td></tr>"
+    SECTION_HTML+="<tr><td>❌</td><td>kubeconfig</td><td>不存在</td><td>需配置 kubectl</td></tr>"
 fi
 
 if [ -n "${KUBECONFIG:-}" ]; then
     log "  ${GREEN}✓${NC} KUBECONFIG 环境变量已设置"
     PASSED=$((PASSED+1))
-    SECTION_HTML+="<tr><td>✅</td><td>环境变量</td><td>KUBECONFIG已设置</td><td>$KUBECONFIG</td></tr>"
+    SECTION_HTML+="<tr><td>✅</td><td>环境变量</td><td>KUBECONFIG 已设置</td><td>$KUBECONFIG</td></tr>"
 else
     log "  ${YELLOW}⚠${NC} KUBECONFIG 未设置（使用默认配置）"
     WARN=$((WARN+1))
     SECTION_HTML+="<tr><td>⚠️</td><td>环境变量</td><td>未设置</td><td>使用默认 ~/.kube/config</td></tr>"
 fi
 
-TIMEZONE=$(timedatectl | grep "Time zone" | awk '{print $3}')
+TIMEZONE=$(timedatectl | grep "Time zone" | awk '{print $3}' || echo "N/A")
 log "  系统时区: $TIMEZONE"
 PASSED=$((PASSED+1))
 SECTION_HTML+="<tr><td>✅</td><td>系统时区</td><td>$TIMEZONE</td><td>-</td></tr>"
@@ -183,38 +173,35 @@ if kubectl get nodes &>/dev/null; then
 else
     log "  ${RED}✗${NC} kubectl 无法连接集群"
     FAILED=$((FAILED+1))
-    SECTION_HTML+="<tr><td>❌</td><td>kubectl连接</td><td>失败</td><td>检查kube-apiserver</td></tr>"
+    SECTION_HTML+="<tr><td>❌</td><td>kubectl连接</td><td>失败</td><td>检查 kube-apiserver</td></tr>"
 fi
 
-NODES=$(kubectl get nodes -o json 2>/dev/null || echo "{}")
-NODE_COUNT=$(echo "$NODES" | jq '.items|length' 2>/dev/null || echo "0")
-READY_NODES=$(echo "$NODES" | jq '[.items[] | select(.status.conditions[] | select(.type=="Ready" and .status=="True"))] | length' 2>/dev/null || echo "0")
+NODES=$(kubectl get nodes -o name 2>/dev/null || echo "")
+NODE_COUNT=$(echo "$NODES" | wc -w)
+READY_NODES=$(kubectl get nodes 2>/dev/null | grep "Ready" | wc -l || echo 0)
 log "  总节点: $NODE_COUNT, 就绪节点: $READY_NODES"
 if [ "$NODE_COUNT" -gt 0 ] && [ "$READY_NODES" -eq "$NODE_COUNT" ]; then
     PASSED=$((PASSED+1))
     SECTION_HTML+="<tr><td>✅</td><td>集群节点</td><td>$READY_NODES/$NODE_COUNT 就绪</td><td>-</td></tr>"
-elif [ "$READY_NODES" -lt "$NODE_COUNT" ]; then
+elif [ "$NODE_COUNT" -gt 0 ]; then
     FAILED=$((FAILED+1))
     NOT_READY=$((NODE_COUNT-READY_NODES))
     SECTION_HTML+="<tr><td>❌</td><td>集群节点</td><td>$READY_NODES/$NODE_COUNT 就绪</td><td>$NOT_READY 个未就绪</td></tr>"
-    NOT_READY_NODES=$(echo "$NODES" | jq -r '.items[] | select(.status.conditions[] | select(.type=="Ready" and .status!="True")) | .metadata.name')
-    for NODE in $NOT_READY_NODES; do
-        ERROR_DETAILS+="节点 $NODE 未就绪<br>"
-    done
+    ERROR_DETAILS+="部分集群节点未就绪<br>"
 fi
 log ""
 
-# ================= 5. 边缘节点握手状态 =================
+# ================= 5. 边缘节点检查 =================
 log "${YELLOW}[5/5] 边缘节点握手状态检查${NC}"
-EDGE_NODES=$(kubectl get nodes -o name 2>/dev/null | grep -v "$(hostname)" | sed 's|node/||')
+EDGE_NODES=$(kubectl get nodes -o name 2>/dev/null | grep -v "$(hostname)" | sed 's|node/||' || echo "")
 EDGE_NODE_COUNT=$(echo "$EDGE_NODES" | wc -w)
-if [ $EDGE_NODE_COUNT -gt 0 ]; then
+if [ "$EDGE_NODE_COUNT" -gt 0 ]; then
     log "  发现 $EDGE_NODE_COUNT 个边缘节点"
     PASSED=$((PASSED+1))
     SECTION_HTML+="<tr><td>✅</td><td>边缘节点发现</td><td>$EDGE_NODE_COUNT 个</td><td>-</td></tr>"
     for NODE in $EDGE_NODES; do
-        NODE_STATUS=$(kubectl get node $NODE -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')
-        NODE_IP=$(kubectl get node $NODE -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}')
+        NODE_STATUS=$(kubectl get node $NODE -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' || echo "Unknown")
+        NODE_IP=$(kubectl get node $NODE -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}' || echo "-")
         if [ "$NODE_STATUS" == "True" ]; then
             log "  ${GREEN}✓${NC} $NODE ($NODE_IP) Ready"
             PASSED=$((PASSED+1))
@@ -243,10 +230,7 @@ log ""
 
 # ================= 生成报告 =================
 TOTAL_CHECKS=$((PASSED + WARN + FAILED))
-if [ $TOTAL_CHECKS -eq 0 ]; then
-    TOTAL_CHECKS=1  # 避免除0
-fi
-HEALTH_SCORE=$((PASSED*100/TOTAL_CHECKS))
+HEALTH_SCORE=$(( TOTAL_CHECKS>0 ? PASSED*100/TOTAL_CHECKS : 0 ))
 
 # HTML报告
 cat > "$REPORT_FILE" <<EOF
@@ -282,13 +266,7 @@ log "${BLUE}══════════ 检查汇总 ════════
 log "总检查项: $TOTAL_CHECKS, ${GREEN}通过: $PASSED${NC}, ${YELLOW}警告: $WARN${NC}, ${RED}失败: $FAILED${NC}"
 log "${GREEN}✅ 报告生成: $REPORT_FILE${NC}"
 log "${GREEN}✅ 日志文件: $LOG_FILE${NC}"
-
-# 自动打开（桌面环境）
-if [ -n "${DISPLAY:-}" ] && command -v xdg-open &>/dev/null; then
-    xdg-open "$REPORT_FILE"
-else
-    log "提示: 使用浏览器打开报告: file://$REPORT_FILE"
-fi
+log "提示: 使用浏览器打开报告: file://$REPORT_FILE"
 
 # ================= 返回状态码 =================
 if [ $FAILED -gt 0 ]; then
