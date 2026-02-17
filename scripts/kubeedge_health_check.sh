@@ -1,10 +1,9 @@
 #!/bin/bash
-# ==============================================================================
-# 🤖 AI员工 - 人工智能Agent工厂
-# 企业级-边缘机器人智慧工程-智能体基础设施健康监控平台
-# KubeEdge 健康检测脚本 v3 完整版
-# 输出: HTML报告 + 日志
-# ==============================================================================
+# ====================================================================
+# 🤖 AI员工 - 企业级 ArgoCD & K8s 健康监控平台
+# 完整版 v4
+# 输出: HTML 报告 + 日志
+# ====================================================================
 
 # ---------------- 配置 ----------------
 export KUBECONFIG=/home/zdl/.kube/config
@@ -55,24 +54,13 @@ log "Kubernetes版本: $K8S_VERSION"
 SECTION_HTML+="<tr><td>✅</td><td>Kubernetes版本</td><td>$K8S_VERSION</td><td>-</td></tr>"
 
 # ---------------- 节点状态 ----------------
-CONTROL_NODES_HTML=""
-EDGE_NODES_HTML=""
-
 if kubectl get nodes --no-headers &>/dev/null; then
     while read -r line; do
         NODE_NAME=$(echo $line | awk '{print $1}')
         NODE_STATUS=$(echo $line | awk '{print $2}')
         NODE_ROLE=$(echo $line | awk '{print $3}')
-        
-        # 节点类型判断
-        if [[ "$NODE_NAME" =~ master ]]; then
-            NODE_TYPE="控制中心"
-            CONTROL_NODES_HTML+="<tr><td>✅</td><td>$NODE_NAME</td><td>$NODE_STATUS</td><td>角色: $NODE_ROLE</td></tr>"
-        else
-            NODE_TYPE="边缘节点"
-            EDGE_NODES_HTML+="<tr><td>✅</td><td>$NODE_NAME</td><td>$NODE_STATUS</td><td>角色: $NODE_ROLE</td></tr>"
-        fi
-        
+        NODE_TYPE=$( [[ "$NODE_NAME" =~ master ]] && echo "控制中心" || echo "边缘节点" )
+
         # 节点软件类型
         if ssh "$NODE_NAME" 'command -v k3s' &>/dev/null; then
             NODE_SOFTWARE="k3s"
@@ -81,7 +69,7 @@ if kubectl get nodes --no-headers &>/dev/null; then
         else
             NODE_SOFTWARE="edge"
         fi
-        
+
         SECTION_HTML+="<tr><td>✅</td><td>$NODE_NAME ($NODE_TYPE)</td><td>$NODE_STATUS</td><td>软件类型: $NODE_SOFTWARE</td></tr>"
     done < <(kubectl get nodes --no-headers)
 else
@@ -89,11 +77,54 @@ else
 fi
 
 # ---------------- 核心端口检测 ----------------
-for PORT in 6443 10000 10002; do
+for PORT in 6443 10000 10002 8080 443; do
     if nc -zv localhost $PORT &>/dev/null; then
         SECTION_HTML+="<tr><td>✅</td><td>端口 $PORT</td><td>可达</td><td>-</td></tr>"
     else
         SECTION_HTML+="<tr><td>❌</td><td>端口 $PORT</td><td>不可达</td><td>检查服务</td></tr>"
+    fi
+done
+
+# ---------------- Pod 状态检查 ----------------
+SECTION_HTML+="<tr><td colspan='4'><b>Pod/Deployment 健康检查</b></td></tr>"
+for ns in kube-system argocd default; do
+    if kubectl get pods -n "$ns" &>/dev/null; then
+        while read -r line; do
+            POD_NAME=$(echo $line | awk '{print $1}')
+            STATUS=$(echo $line | awk '{print $3}')
+            RESTARTS=$(echo $line | awk '{print $4}')
+            SECTION_HTML+="<tr><td>$( [[ "$STATUS" == "Running" ]] && echo "✅" || echo "❌" )</td><td>$POD_NAME (ns:$ns)</td><td>状态: $STATUS, 重启次数: $RESTARTS</td><td>-</td></tr>"
+        done < <(kubectl get pods -n "$ns" --no-headers)
+    else
+        SECTION_HTML+="<tr><td>❌</td><td>命名空间: $ns</td><td>无法获取 Pod 信息</td><td>-</td></tr>"
+    fi
+done
+
+# ---------------- PVC / 存储检查 ----------------
+SECTION_HTML+="<tr><td colspan='4'><b>存储卷/PVC 检查</b></td></tr>"
+for pvc in $(kubectl get pvc -n argocd --no-headers 2>/dev/null | awk '{print $1}'); do
+    STATUS=$(kubectl get pvc "$pvc" -n argocd -o jsonpath='{.status.phase}')
+    SECTION_HTML+="<tr><td>$( [[ "$STATUS" == "Bound" ]] && echo "✅" || echo "❌" )</td><td>$pvc</td><td>状态: $STATUS</td><td>-</td></tr>"
+done
+
+# ---------------- K8s 核心组件 ----------------
+SECTION_HTML+="<tr><td colspan='4'><b>Kubernetes 核心组件健康</b></td></tr>"
+for component in kube-apiserver kube-controller-manager kube-scheduler etcd; do
+    if kubectl get pod -n kube-system | grep "$component" &>/dev/null; then
+        STATUS=$(kubectl get pod -n kube-system | grep "$component" | awk '{print $3}')
+        SECTION_HTML+="<tr><td>$( [[ "$STATUS" == "Running" ]] && echo "✅" || echo "❌" )</td><td>$component</td><td>状态: $STATUS</td><td>-</td></tr>"
+    else
+        SECTION_HTML+="<tr><td>❌</td><td>$component</td><td>Pod 未发现</td><td>检查部署</td></tr>"
+    fi
+done
+
+# ---------------- 集群网络连通性 ----------------
+SECTION_HTML+="<tr><td colspan='4'><b>集群网络连通性</b></td></tr>"
+for node in $(kubectl get nodes --no-headers | awk '{print $1}'); do
+    if ping -c 1 -W 1 "$node" &>/dev/null; then
+        SECTION_HTML+="<tr><td>✅</td><td>$node</td><td>节点可达</td><td>-</td></tr>"
+    else
+        SECTION_HTML+="<tr><td>❌</td><td>$node</td><td>节点不可达</td><td>检查网络</td></tr>"
     fi
 done
 
@@ -106,7 +137,7 @@ cat > "$REPORT_FILE" <<EOF
 <html>
 <head>
 <meta charset="UTF-8">
-<title>🤖 AI员工 - 人工智能Agent工厂</title>
+<title>🤖 AI员工 - 企业级健康监控平台</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
 body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 40px; background: #f0f2f5; }
@@ -121,8 +152,8 @@ th { background: #f8f9fa; font-weight: bold; }
 </head>
 <body>
 <div class="card">
-<h1>🤖 AI员工 - 人工智能Agent工厂</h1>
-<h2>企业级-边缘机器人智慧工程-智能体基础设施健康监控平台</h2>
+<h1>🤖 AI员工 - 企业级健康监控平台</h1>
+<h2>ArgoCD & K8s 全面健康检查</h2>
 <p>生成时间: $(date '+%Y-%m-%d %H:%M:%S') | 控制中心: $CONTROL_IP</p>
 <p>健康评分: $HEALTH_SCORE%</p>
 <div class="canvas-container">
@@ -159,6 +190,6 @@ const chart = new Chart(ctx, {
 </html>
 EOF
 
-log "${GREEN}✅ KubeEdge 健康检测完成${NC}"
+log "${GREEN}✅ 企业级 ArgoCD & K8s 健康检测完成${NC}"
 log "报告: $REPORT_FILE"
 log "日志: $LOG_FILE"
