@@ -1,37 +1,47 @@
 #!/bin/bash
-# ============================================
-# 简单检测并生成体检报告
-# ============================================
+
+# 1. 自动定位 K8s 配置文件 (防止 sudo 运行时找不到命令)
+export KUBECONFIG=/home/zdl/.kube/config
 
 NAS_PATH="/mnt/truenas"
-# 我们把文件名定死，方便你去查看
 REPORT_FILE="$NAS_PATH/cluster_health_report.md"
 
-echo "--- 开始检测 ---"
+echo "--- 开始深度检测 ---"
 
-# 1. 检查目录
-if [ -d "$NAS_PATH" ]; then
-    echo "✅ 路径存在"
-else
-    echo "❌ 路径不存在，请检查挂载命令"
+# 2. 确保目录存在
+if [ ! -d "$NAS_PATH" ]; then
+    echo "❌ 错误: $NAS_PATH 未挂载或目录不存在"
     exit 1
 fi
 
-# 2. 写入真正的体检报告（不删除，留给你看）
+# 3. 使用临时文件中转，最后再一次性写入（避开权限碎碎念）
+TEMP_LOG="/tmp/health_tmp.md"
+
 {
     echo "# 🩺 K8s 节点健康体检"
-    echo "检测时间: $(date)"
+    echo "检测时间: $(date '+%Y-%m-%d %H:%M:%S')"
     echo "---"
     echo "### 1. 存储状态"
     echo "- 挂载路径: $NAS_PATH"
-    echo "- 剩余空间: $(df -h $NAS_PATH | awk 'NR==2 {print $4}')"
+    echo "- 硬盘余量: $(df -h $NAS_PATH | awk 'NR==2 {print $4}')"
+    
     echo -e "\n### 2. K8s 节点状态"
-    kubectl get nodes
-} > "$REPORT_FILE" 2>&1
+    echo '```'
+    kubectl get nodes 2>&1
+    echo '```'
+    
+    echo -e "\n### 3. 边缘节点 (KubeEdge) 详细状态"
+    echo '```'
+    kubectl get nodes -l node-role.kubernetes.io/edge -o wide 2>&1
+    echo '```'
+} > "$TEMP_LOG"
+
+# 4. 强力写入 NAS
+sudo cp "$TEMP_LOG" "$REPORT_FILE" && sudo chmod 666 "$REPORT_FILE"
 
 if [ $? -eq 0 ]; then
-    echo "✅ 报告生成成功！"
-    echo "📂 请去 TrueNAS 对应的文件夹查看: cluster_health_report.md"
+    echo "✅ 报告已成功推送到 TrueNAS！"
+    echo "📂 文件名: $REPORT_FILE"
 else
-    echo "❌ 写入失败，请检查 TrueNAS 的 NFS 权限设置"
+    echo "❌ 写入 NAS 失败"
 fi
