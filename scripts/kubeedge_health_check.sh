@@ -13,7 +13,7 @@ CONTROL_IP="192.168.1.10"
 NETWORK_PREFIX="192.168.1"
 
 # NAS路径
-NAS_PATH="/mnt/TRUENAS/Multi-Agent-Log"
+NAS_PATH="/mnt/Agent-Ai/CSV_Data/Multi-Agent-Log"
 if [ ! -d "$NAS_PATH" ]; then
     echo -e "\033[0;31m❌ NAS路径 $NAS_PATH 不存在或未挂载，请先挂载NAS\033[0m"
     exit 1
