@@ -2,17 +2,21 @@
 # ============================================
 # KubeEdge 集群健康检测脚本 (安全版)
 # 版本: 2.1.0
-# 输出: HTML报告 + 日志
+# 输出: HTML报告 + 日志 (保存到NAS挂载路径)
 # ============================================
 
 # ================= 配置 =================
 CONTROL_IP=$(hostname -I | awk '{print $1}')
 NETWORK_PREFIX="192.168.1"
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-REPORT_FILE="/tmp/kubeedge-health-report-${TIMESTAMP}.html"
-LOG_FILE="/tmp/kubeedge-health-check-${TIMESTAMP}.log"
 
-mkdir -p /tmp
+# 你的NAS挂载路径（确保已挂载且有写权限）
+NAS_LOG_DIR="/mnt/Agent-Ai/CSV_Data/Multi-Agent-Log"
+mkdir -p "$NAS_LOG_DIR"
+
+REPORT_FILE="${NAS_LOG_DIR}/kubeedge-health-report-${TIMESTAMP}.html"
+LOG_FILE="${NAS_LOG_DIR}/kubeedge-health-check-${TIMESTAMP}.log"
+
 [ -f "$REPORT_FILE" ] && rm -f "$REPORT_FILE"
 [ -f "$LOG_FILE" ] && rm -f "$LOG_FILE"
 
@@ -110,33 +114,103 @@ log ""
 
 # ================= 3. 配置健康检查 =================
 log "${YELLOW}[3/5] 配置健康检查${NC}"
-[ -f ~/.kube/config ] && log "  ✓ kubeconfig 文件存在" || log "  ✗ kubeconfig 文件不存在"
-[ -n "${KUBECONFIG:-}" ] && log "  ✓ KUBECONFIG 已设置" || log "  ⚠ KUBECONFIG 未设置"
+if [ -f ~/.kube/config ]; then
+    log "  ${GREEN}✓${NC} kubeconfig 文件存在"
+    PASSED=$((PASSED+1))
+else
+    log "  ${RED}✗${NC} kubeconfig 文件不存在"
+    FAILED=$((FAILED+1))
+fi
+
+if [ -n "${KUBECONFIG:-}" ]; then
+    log "  ${GREEN}✓${NC} KUBECONFIG 已设置"
+    PASSED=$((PASSED+1))
+else
+    log "  ${YELLOW}⚠${NC} KUBECONFIG 未设置"
+    WARN=$((WARN+1))
+fi
 TIMEZONE=$(timedatectl | grep "Time zone" | awk '{print $3}' || echo "N/A")
 log "  系统时区: $TIMEZONE"
+PASSED=$((PASSED+1))
+log ""
 
 # ================= 4. Kubernetes服务健康检查 =================
 log "${YELLOW}[4/5] Kubernetes服务健康检查${NC}"
-kubectl get nodes &>/dev/null || log "  ⚠ 无法连接集群"
+if kubectl get nodes &>/dev/null; then
+    log "  ${GREEN}✓${NC} kubectl 能连接集群"
+    PASSED=$((PASSED+1))
+else
+    log "  ${RED}✗${NC} kubectl 无法连接集群"
+    FAILED=$((FAILED+1))
+fi
+
+NODES=$(kubectl get nodes -o name 2>/dev/null || echo "")
+NODE_COUNT=$(echo "$NODES" | wc -w)
+READY_NODES=$(kubectl get nodes 2>/dev/null | grep "Ready" | wc -l || echo 0)
+log "  总节点: $NODE_COUNT, 就绪节点: $READY_NODES"
+if [ "$NODE_COUNT" -gt 0 ] && [ "$READY_NODES" -eq "$NODE_COUNT" ]; then
+    PASSED=$((PASSED+1))
+elif [ "$NODE_COUNT" -gt 0 ]; then
+    FAILED=$((FAILED+1))
+fi
+log ""
 
 # ================= 5. 边缘节点检查 =================
 log "${YELLOW}[5/5] 边缘节点握手状态检查${NC}"
-log "  检查边缘节点状态..."
+EDGE_NODES=$(kubectl get nodes -o name 2>/dev/null | grep -v "$(hostname)" | sed 's|node/||' || echo "")
+EDGE_NODE_COUNT=$(echo "$EDGE_NODES" | wc -w)
+if [ "$EDGE_NODE_COUNT" -gt 0 ]; then
+    log "  发现 $EDGE_NODE_COUNT 个边缘节点"
+    PASSED=$((PASSED+1))
+    for NODE in $EDGE_NODES; do
+        NODE_STATUS=$(kubectl get node $NODE -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' || echo "Unknown")
+        NODE_IP=$(kubectl get node $NODE -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}' || echo "-")
+        if [ "$NODE_STATUS" == "True" ]; then
+            log "  ${GREEN}✓${NC} $NODE ($NODE_IP) Ready"
+            PASSED=$((PASSED+1))
+        else
+            log "  ${RED}✗${NC} $NODE ($NODE_IP) NotReady"
+            FAILED=$((FAILED+1))
+        fi
+        if [ -n "$NODE_IP" ]; then
+            if ping -c 1 -W 2 $NODE_IP &>/dev/null; then
+                log "    - 网络可达"
+            else
+                log "    - 网络不可达"
+            fi
+        fi
+    done
+else
+    log "  ${YELLOW}⚠${NC} 未发现边缘节点"
+    WARN=$((WARN+1))
+fi
+log ""
 
 # ================= 生成报告 =================
 TOTAL_CHECKS=$((PASSED+WARN+FAILED))
 HEALTH_SCORE=$(( TOTAL_CHECKS>0 ? PASSED*100/TOTAL_CHECKS : 0 ))
 
 cat > "$REPORT_FILE" <<EOF
-<html><body>
+<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>KubeEdge 健康检测报告</title></head><body>
 <h1>KubeEdge 健康检测报告</h1>
 <p>生成时间: $(date) | 控制中心: $CONTROL_IP</p>
 <p>总检查: $TOTAL_CHECKS, 通过: $PASSED, 警告: $WARN, 失败: $FAILED, 健康评分: $HEALTH_SCORE%</p>
-<p>日志文件: $LOG_FILE</p>
+<table border="1" cellpadding="5" cellspacing="0">
+<tr><th>状态</th><th>检查项</th><th>结果</th><th>备注</th></tr>
+$SECTION_HTML
+</table>
 </body></html>
 EOF
 
 log ""
 log "✅ 报告生成: $REPORT_FILE"
 log "✅ 日志文件: $LOG_FILE"
-log "提示: 打开报告: file://$REPORT_FILE"
+log "提示: 使用浏览器打开报告: file://$REPORT_FILE"
+
+# ================= 返回状态码 =================
+if [ $FAILED -gt 0 ]; then
+    exit 1
+else
+    exit 0
+fi
