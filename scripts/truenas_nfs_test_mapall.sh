@@ -26,17 +26,21 @@ echo "======================================"
 # 创建挂载点
 mkdir -p "$LOCAL_MOUNT"
 
-# 网络连通测试
+# 网络连通测试（失败不退出）
 echo "Testing connectivity to TrueNAS..."
-ping -c 3 "$TRUENAS_IP"
+if ping -c 3 "$TRUENAS_IP" &>/dev/null; then
+    echo "[OK] Network reachable"
+else
+    echo "[WARN] Cannot reach TrueNAS ($TRUENAS_IP), continuing..."
+fi
 
 # 卸载已有挂载（避免残留）
 if mountpoint -q "$LOCAL_MOUNT"; then
     echo "Unmounting existing mount at $LOCAL_MOUNT..."
-    sudo umount "$LOCAL_MOUNT"
+    sudo umount "$LOCAL_MOUNT" || true
 fi
 
-# 挂载 NFS（不指定 uid/gid，依赖 mapall_user）
+# 挂载 NFS
 echo "Mounting NFS share..."
 sudo mount -t nfs -o vers=4.1,rsize=1048576,wsize=1048576,soft,timeo=600,retrans=3,_netdev \
     "$TRUENAS_IP:$NFS_PATH" "$LOCAL_MOUNT"
@@ -46,6 +50,7 @@ sleep 2
 # 挂载检测
 if mountpoint -q "$LOCAL_MOUNT"; then
     echo "[OK] NFS mounted successfully at $LOCAL_MOUNT"
+    ls -ld "$LOCAL_MOUNT"
 else
     echo "[FAIL] NFS mount failed"
     exit 1
