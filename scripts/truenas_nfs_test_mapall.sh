@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# ======= 配置区 =======
+# ======= 配置区 ======
 TRUENAS_IP="192.168.1.6"
 NFS_PATH="/mnt/Agent-Ai/CSV_Data/Multi-Agent-Log"
 LOCAL_MOUNT="/mnt/truenas"
