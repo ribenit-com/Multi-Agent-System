@@ -3,7 +3,7 @@
 # 简单NAS挂载检测脚本
 # ============================================
 
-NAS_PATH="/mnt/Agent-Ai/CSV_Data/Multi-Agent-Log"
+NAS_PATH="/mnt/truenas"
 TEST_FILE="$NAS_PATH/test_write_$(date +%s).txt"
 
 echo "检测 NAS 挂载路径: $NAS_PATH"
