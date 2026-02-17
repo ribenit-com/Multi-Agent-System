@@ -1,23 +1,33 @@
 #!/bin/bash
 # ==================================================================
-# 🤖 企业级 ArgoCD 安装器（增强调试版）
-# 自动检查集群、kubectl、Helm、存储，输出详细日志
+# 🤖 企业级 ArgoCD 安装器（最终版）
+# 自动检查集群、kubectl、Helm、存储，输出详细日志到 NAS
 # ==================================================================
 
 set -euo pipefail
 
-LOG_FILE="/tmp/Enterprise_ArgoCD_Installer_$(date +%Y%m%d_%H%M%S).log"
-echo "🔹 安装日志输出到 $LOG_FILE"
+# ---------------- 配置 ----------------
+ARGO_NAMESPACE="${ARGO_NAMESPACE:-argocd}"
+PVC_SIZE="${PVC_SIZE:-10Gi}"
+STORAGE_CLASS="${STORAGE_CLASS:-local-path}"   # 修改为你的存储类
+HELM_RELEASE_NAME="${HELM_RELEASE_NAME:-argocd}"
+HELM_CHART="${HELM_CHART:-argo/argo-cd}"
+HELM_REPO="${HELM_REPO:-https://argoproj.github.io/argo-helm}"
+ARGOCD_HOST="${ARGOCD_HOST:-argocd.example.com}" # 企业可自定义
+SERVICE_TYPE="${SERVICE_TYPE:-LoadBalancer}"    # LoadBalancer 或 NodePort
+
+# 日志路径，可修改为 NAS 挂载路径
+NAS_LOG_DIR="${NAS_LOG_DIR:-/mnt/truenas/logs}"
+mkdir -p "$NAS_LOG_DIR"
+LOG_FILE="$NAS_LOG_DIR/Enterprise_ArgoCD_Installer_$(date +%Y%m%d_%H%M%S).log"
 
 log() { echo -e "$1" | tee -a "$LOG_FILE"; }
 
-ARGO_NAMESPACE="argocd"
-PVC_SIZE="10Gi"
-STORAGE_CLASS="local-path"  # 改成你的存储类
-HELM_RELEASE_NAME="argocd"
-HELM_CHART="argo/argo-cd"
-HELM_REPO="https://argoproj.github.io/argo-helm"
+log "🔹 安装日志输出到 $LOG_FILE"
 
+# ---------------- KUBECONFIG ----------------
+export KUBECONFIG="${KUBECONFIG:-$HOME/.kube/config}"
+log "🔹 当前 KUBECONFIG: $KUBECONFIG"
 log "🔹 当前节点 IP: $(hostname -I | awk '{print $1}')"
 
 # ---------------- 检查 kubectl ----------------
@@ -33,7 +43,6 @@ kubectl version --client=true | tee -a "$LOG_FILE"
 log "🔹 测试访问集群..."
 if ! kubectl cluster-info &>/dev/null; then
     log "❌ 无法访问 Kubernetes 集群，请检查 KUBECONFIG 和网络"
-    log "当前 KUBECONFIG: ${KUBECONFIG:-未设置}"
     exit 1
 fi
 kubectl get nodes -o wide | tee -a "$LOG_FILE"
@@ -78,9 +87,9 @@ log "🔹 安装 ArgoCD..."
 helm upgrade --install "$HELM_RELEASE_NAME" "$HELM_CHART" \
     --namespace "$ARGO_NAMESPACE" \
     --wait \
-    --set server.service.type=LoadBalancer \
+    --set server.service.type="$SERVICE_TYPE" \
     --set server.ingress.enabled=true \
-    --set server.ingress.hosts[0]=argocd.example.com \
+    --set server.ingress.hosts[0]="$ARGOCD_HOST" \
     --set server.persistence.enabled=true \
     --set server.persistence.size="$PVC_SIZE" \
     --set server.persistence.storageClass="$STORAGE_CLASS" | tee -a "$LOG_FILE"
@@ -89,11 +98,14 @@ helm upgrade --install "$HELM_RELEASE_NAME" "$HELM_CHART" \
 log "🔹 获取 ArgoCD 初始密码..."
 if kubectl -n "$ARGO_NAMESPACE" get secret argocd-initial-admin-secret &>/dev/null; then
     INITIAL_PASSWORD=$(kubectl -n "$ARGO_NAMESPACE" get secret argocd-initial-admin-secret \
-        -o jsonpath="{.data.password}" | base64 --decode)
+        -o jsonpath="{.data.password}" 2>/dev/null || \
+        kubectl -n "$ARGO_NAMESPACE" get secret argocd-initial-admin-secret \
+        -o jsonpath="{.data.admin\.password}" | base64 --decode)
     log "✅ ArgoCD 安装完成"
-    log "URL: https://argocd.example.com"
+    log "URL: https://$ARGOCD_HOST"
     log "初始账号: admin"
     log "初始密码: $INITIAL_PASSWORD"
+    log "⚠️ 建议立即修改密码: kubectl -n $ARGO_NAMESPACE exec <argocd-server-pod> -- argocd account update-password"
 else
     log "❌ 未找到 argocd-initial-admin-secret，请检查 Helm 安装状态"
 fi
