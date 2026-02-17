@@ -1,4 +1,6 @@
-cat > deploy-n8n-kubeedge-production.sh << 'EOF'
+# 1. 将您上面的完整脚本内容保存到一个新文件中
+# 可以直接在终端中粘贴以下命令（从 cat 开始到最后一个 EOF 结束）
+cat > deploy-n8n-final-run.sh << 'EOF'
 #!/bin/bash
 
 # ============================================
@@ -80,12 +82,7 @@ sleep 1
 
 # --- 3. 生成部署 YAML ---
 echo -e "${YELLOW}[3/5] 生成 n8n 部署配置...${NC}"
-
-# 创建命名空间（可选）
-# kubectl create namespace n8n 2>/dev/null
-
-# 生成 YAML 文件
-cat > n8n-production.yaml << EOF
+cat > n8n-production.yaml << EOF2
 ---
 apiVersion: v1
 kind: Service
@@ -122,10 +119,8 @@ spec:
       labels:
         app: n8n
     spec:
-      # 指定调度到边缘节点
       nodeSelector:
         kubernetes.io/hostname: ${EDGE_NODE}
-      # 添加边缘节点污点容忍
       tolerations:
       - key: "node-role.kubernetes.io/edge"
         operator: "Exists"
@@ -153,13 +148,9 @@ spec:
           value: "http://${NODE_IP}:31678"
         - name: GENERIC_TIMEZONE
           value: "Asia/Shanghai"
-        # 生产环境建议设置加密密钥
-        # - name: N8N_ENCRYPTION_KEY
-        #   value: "your-strong-encryption-key-here"
         volumeMounts:
         - name: n8n-data
           mountPath: /home/node/.n8n
-        # 添加健康检查
         livenessProbe:
           httpGet:
             path: /healthz
@@ -187,7 +178,7 @@ spec:
         hostPath:
           path: ${STORAGE_PATH}
           type: DirectoryOrCreate
-EOF
+EOF2
 
 echo -e "${GREEN}✓ 配置文件生成: n8n-production.yaml${NC}"
 sleep 1
@@ -195,12 +186,10 @@ sleep 1
 # --- 4. 应用部署 ---
 echo -e "${YELLOW}[4/5] 部署 n8n 到 KubeEdge 集群...${NC}"
 
-# 先删除可能存在的旧部署
 kubectl delete deployment n8n --ignore-not-found &> /dev/null
 kubectl delete svc n8n-service --ignore-not-found &> /dev/null
 sleep 2
 
-# 应用新配置
 kubectl apply -f n8n-production.yaml
 
 if [ $? -eq 0 ]; then
@@ -212,12 +201,9 @@ fi
 
 # --- 5. 等待并验证 ---
 echo -e "${YELLOW}[5/5] 等待 Pod 启动并验证...${NC}"
-
-# 等待 Pod 调度成功
 echo "   等待 Pod 调度到边缘节点..."
 sleep 5
 
-# 获取 Pod 状态
 POD_STATUS=$(kubectl get pods -l app=n8n -o jsonpath='{.items[0].status.phase}' 2>/dev/null)
 POD_NODE=$(kubectl get pods -l app=n8n -o jsonpath='{.items[0].spec.nodeName}' 2>/dev/null)
 
@@ -239,19 +225,16 @@ echo -e "  ${BLUE}•${NC} 边缘节点:    ${GREEN}${EDGE_NODE}${NC}"
 echo -e "  ${BLUE}•${NC} 节点 IP:      ${GREEN}${NODE_IP}${NC}"
 echo -e "  ${BLUE}•${NC} 数据目录:     ${GREEN}${STORAGE_PATH}${NC}"
 echo ""
-
 echo -e "${CYAN}🌐 访问地址${NC}"
 echo -e "  ${BLUE}•${NC} 集群内访问:  ${GREEN}http://n8n-service:5678${NC}"
 echo -e "  ${BLUE}•${NC} NodePort 访问: ${GREEN}http://${NODE_IP}:31678${NC}"
 echo ""
-
 echo -e "${CYAN}🔧 管理命令 (在控制中心执行)${NC}"
 echo -e "  ${BLUE}•${NC} 查看 Pod:     ${YELLOW}kubectl get pods -l app=n8n -o wide${NC}"
 echo -e "  ${BLUE}•${NC} 查看日志:     ${YELLOW}kubectl logs -f -l app=n8n${NC}"
 echo -e "  ${BLUE}•${NC} 查看详情:     ${YELLOW}kubectl describe pod -l app=n8n${NC}"
 echo -e "  ${BLUE}•${NC} 重启部署:     ${YELLOW}kubectl rollout restart deployment n8n${NC}"
 echo ""
-
 echo -e "${YELLOW}📌 后续步骤：${NC}"
 echo -e "  1. 如果无法通过 NodePort 访问，请在边缘节点配置反向代理"
 echo -e "  2. 首次访问 n8n 需要创建管理员账号"
@@ -268,7 +251,8 @@ fi
 exit 0
 EOF
 
-chmod +x deploy-n8n-kubeedge-production.sh
+# 2. 给脚本添加执行权限
+chmod +x deploy-n8n-final-run.sh
 
-echo -e "${GREEN}✅ 生产级部署脚本已创建！${NC}"
-echo -e "${YELLOW}请在控制中心（.10）运行此脚本：${NC} ./deploy-n8n-kubeedge-production.sh"
+# 3. 运行脚本（这次一定会看到详细的输出）
+./deploy-n8n-final-run.sh
