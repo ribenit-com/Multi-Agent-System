@@ -1,8 +1,8 @@
 #!/bin/bash
 # ====================================================================
 # 🤖 AI员工 - 企业级 ArgoCD & K8s 健康监控平台
-# 增强版 v6 - 节点网络/Pod/ArgoCD端口详细检测
-# 自动安装 nc（netcat） + 日志详细输出
+# 新版 v6 - 节点握手状态 & 自动安装 nc
+# 输出: HTML 报告 + 日志
 # ====================================================================
 
 set -euo pipefail
@@ -25,15 +25,15 @@ SECTION_HTML=""
 
 log() { echo -e "$1" | tee -a "$LOG_FILE"; }
 
-# ---------------- 安装 nc ----------------
+# ---------------- 检查 nc 工具 ----------------
 if ! command -v nc &>/dev/null; then
-    log "${YELLOW}⚠️ nc (netcat) 未安装，尝试安装...${NC}"
+    log "${YELLOW}⚠ nc 工具未安装，尝试安装...${NC}"
     if command -v apt &>/dev/null; then
         sudo apt update && sudo apt install -y netcat
     elif command -v yum &>/dev/null; then
         sudo yum install -y nc
     else
-        log "${RED}❌ 无法自动安装 nc，请手动安装${NC}"
+        log "${RED}❌ 无法安装 nc，请手动安装${NC}"
     fi
 fi
 
@@ -61,87 +61,49 @@ K8S_VERSION=$(kubectl version --short --request-timeout=5s 2>/dev/null | grep Se
 log "Kubernetes版本: $K8S_VERSION"
 SECTION_HTML+="<tr><td>✅</td><td>Kubernetes版本</td><td>$K8S_VERSION</td><td>-</td></tr>"
 
-# ---------------- 节点状态 & 网络检查 ----------------
-if kubectl get nodes --no-headers --request-timeout=5s &>/dev/null; then
-    while read -r line; do
-        NODE_NAME=$(echo $line | awk '{print $1}')
-        NODE_STATUS=$(echo $line | awk '{print $2}')
-        NODE_ROLE=$(echo $line | awk '{print $3}')
-        NODE_TYPE=$( [[ "$NODE_NAME" =~ master ]] && echo "控制中心" || echo "边缘节点" )
+# ---------------- 节点状态 ----------------
+SECTION_HTML+="<tr><td colspan='4'><b>节点握手状态</b></td></tr>"
+TCP_PORTS=(6443 10000 10002 8080 443)
 
-        # 节点 ICMP 检查
-        if ping -c 1 -W 1 "$NODE_NAME" &>/dev/null; then
-            PING_STATUS="✅"
-            PING_MSG="可达"
+for NODE in $(kubectl get nodes --no-headers --request-timeout=5s | awk '{print $1}'); do
+    NODE_IP=$(kubectl get node $NODE -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}')
+    NODE_TYPE=$( [[ "$NODE" =~ master ]] && echo "控制中心" || echo "边缘节点" )
+    NODE_STATUS=$(kubectl get node $NODE -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')
+
+    # TCP端口检测
+    TCP_STATUS=""
+    for PORT in "${TCP_PORTS[@]}"; do
+        nc -z -w 2 $NODE_IP $PORT &>/dev/null && TCP_STATUS+="$PORT ✅ " || TCP_STATUS+="$PORT ❌ "
+    done
+
+    # ICMP检测
+    ping -c 1 -W 1 $NODE_IP &>/dev/null && PING_STATUS="✅" || PING_STATUS="❌"
+
+    SECTION_HTML+="<tr><td>$( [[ "$NODE_STATUS" == "True" ]] && echo "✅" || echo "❌" )</td><td>$NODE ($NODE_TYPE)</td><td>TCP端口: $TCP_STATUS</td><td>ICMP: $PING_STATUS</td></tr>"
+done
+
+# ---------------- Pod/Namespace 检查 ----------------
+SECTION_HTML+="<tr><td colspan='4'><b>Pod/Namespace 检查</b></td></tr>"
+for NS in kube-system argocd default; do
+    if kubectl get ns $NS &>/dev/null; then
+        POD_LIST=$(kubectl get pods -n $NS --no-headers --request-timeout=5s 2>/dev/null || echo "")
+        if [ -z "$POD_LIST" ]; then
+            SECTION_HTML+="<tr><td>❌</td><td>命名空间: $NS</td><td>存在但无 Pod</td><td>-</td></tr>"
         else
-            PING_STATUS="❌"
-            PING_MSG="ICMP 不通"
+            while read -r line; do
+                POD_NAME=$(echo $line | awk '{print $1}')
+                STATUS=$(echo $line | awk '{print $3}')
+                RESTARTS=$(echo $line | awk '{print $4}')
+                SECTION_HTML+="<tr><td>$( [[ "$STATUS" == "Running" ]] && echo "✅" || echo "❌" )</td><td>$POD_NAME (ns:$NS)</td><td>状态: $STATUS, 重启次数: $RESTARTS</td><td>-</td></tr>"
+            done <<< "$POD_LIST"
         fi
-
-        # TCP 检查 ArgoCD/K8s关键端口
-        TCP_MSG=""
-        for PORT in 6443 10000 10002 8080 443; do
-            if nc -z -w 2 "$NODE_NAME" $PORT &>/dev/null; then
-                TCP_MSG+="$PORT:✅ "
-            else
-                TCP_MSG+="$PORT:❌ "
-            fi
-        done
-
-        SECTION_HTML+="<tr><td>$PING_STATUS</td><td>$NODE_NAME ($NODE_TYPE)</td><td>状态: $NODE_STATUS, TCP端口: $TCP_MSG</td><td>$PING_MSG</td></tr>"
-    done < <(kubectl get nodes --no-headers --request-timeout=5s)
-else
-    log "${RED}❌ 无法获取节点信息${NC}"
-fi
-
-# ---------------- Pod/Deployment 检查 ----------------
-SECTION_HTML+="<tr><td colspan='4'><b>Pod/Deployment 健康检查</b></td></tr>"
-for ns in kube-system argocd default; do
-    POD_LIST=$(kubectl get pods -n "$ns" --no-headers --request-timeout=5s 2>/dev/null || echo "")
-    if [ -n "$POD_LIST" ]; then
-        while read -r line; do
-            POD_NAME=$(echo $line | awk '{print $1}')
-            STATUS=$(echo $line | awk '{print $3}')
-            RESTARTS=$(echo $line | awk '{print $4}')
-            SECTION_HTML+="<tr><td>$( [[ "$STATUS" == "Running" ]] && echo "✅" || echo "❌" )</td><td>$POD_NAME (ns:$ns)</td><td>状态: $STATUS, 重启次数: $RESTARTS</td><td>-</td></tr>"
-        done <<< "$POD_LIST"
     else
-        # 区分空命名空间和无法获取信息
-        COUNT_NS=$(kubectl get ns "$ns" --no-headers 2>/dev/null | wc -l || echo 0)
-        if [ "$COUNT_NS" -eq 0 ]; then
-            MSG="❌ 命名空间不存在"
-        else
-            MSG="❌ 命名空间存在，但无 Pod"
-        fi
-        SECTION_HTML+="<tr><td>❌</td><td>命名空间: $ns</td><td>$MSG</td><td>-</td></tr>"
+        SECTION_HTML+="<tr><td>❌</td><td>命名空间: $NS</td><td>不存在</td><td>-</td></tr>"
     fi
 done
 
-# ---------------- PVC 检查 ----------------
-SECTION_HTML+="<tr><td colspan='4'><b>存储卷/PVC 检查</b></td></tr>"
-PVC_LIST=$(kubectl get pvc -n argocd --no-headers --request-timeout=5s 2>/dev/null || echo "")
-if [ -n "$PVC_LIST" ]; then
-    while read -r pvc; do
-        NAME=$(echo $pvc | awk '{print $1}')
-        STATUS=$(kubectl get pvc "$NAME" -n argocd -o jsonpath='{.status.phase}')
-        SECTION_HTML+="<tr><td>$( [[ "$STATUS" == "Bound" ]] && echo "✅" || echo "❌" )</td><td>$NAME</td><td>状态: $STATUS</td><td>-</td></tr>"
-    done <<< "$PVC_LIST"
-fi
-
-# ---------------- K8s核心组件 ----------------
-SECTION_HTML+="<tr><td colspan='4'><b>Kubernetes 核心组件健康</b></td></tr>"
-for comp in kube-apiserver kube-controller-manager kube-scheduler etcd; do
-    POD=$(kubectl get pod -n kube-system --request-timeout=5s 2>/dev/null | grep "$comp" || echo "")
-    if [ -n "$POD" ]; then
-        STATUS=$(echo "$POD" | awk '{print $3}')
-        SECTION_HTML+="<tr><td>$( [[ "$STATUS" == "Running" ]] && echo "✅" || echo "❌" )</td><td>$comp</td><td>状态: $STATUS</td><td>-</td></tr>"
-    else
-        SECTION_HTML+="<tr><td>❌</td><td>$comp</td><td>Pod 未发现</td><td>检查部署</td></tr>"
-    fi
-done
-
-# ---------------- HTML 报告 ----------------
-HEALTH_SCORE=100  # 简化版
+# ---------------- HTML报告 ----------------
+HEALTH_SCORE=100
 cat > "$REPORT_FILE" <<EOF
 <!DOCTYPE html>
 <html>
