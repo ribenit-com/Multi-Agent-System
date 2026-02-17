@@ -1,135 +1,124 @@
 #!/bin/bash
-set -euo pipefail
+set -e
 
-# ---------------------------
+# -----------------------------
 # 配置
-# ---------------------------
+# -----------------------------
 NAS_DIR="/mnt/truenas"
-LOG_FILE="$NAS_DIR/Enterprise_ArgoCD_Installer_$(date +%Y%m%d_%H%M%S).log"
-STORAGE_CLASS="local-path"
-ARCDOC_NAMESPACE="argocd"
-ARCDOC_RELEASE="argocd"
+mkdir -p "$NAS_DIR"
+
+ARGOCD_NAMESPACE="argocd"
+STORAGECLASS_NAME="local-path"
+
+# 离线镜像列表
 IMAGES=(
-    "m.daocloud.io/quay.io/argoproj/argocd:v2.9.1"
-    "docker.m.daocloud.io/library/redis:7.0.14-alpine"
-    "ghcr.m.daocloud.io/dexidp/dex:v2.37.0"
-    "m.daocloud.io/docker.io/jimmidyson/configmap-reload:v0.8.0"
-    "m.daocloud.io/docker.io/library/alpine:latest"
+  "m.daocloud.io/quay.io/argoproj/argocd:v2.9.1"
+  "docker.m.daocloud.io/library/redis:7.0.14-alpine"
+  "ghcr.m.daocloud.io/dexidp/dex:v2.37.0"
+  "m.daocloud.io/docker.io/jimmidyson/configmap-reload:v0.8.0"
+  "m.daocloud.io/docker.io/library/alpine:latest"
 )
 
-# ---------------------------
-# 日志函数
-# ---------------------------
-log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG_FILE"
-}
+# -----------------------------
+# 检查 kubectl
+# -----------------------------
+echo "🔹 当前节点 IP: $(hostname -I | awk '{print $1}')"
+echo "🔹 当前 KUBECONFIG: ${KUBECONFIG:-$HOME/.kube/config}"
 
-# ---------------------------
-# 检查 Kubectl
-# ---------------------------
-log "🔹 当前节点 IP: $(hostname -I | awk '{print $1}')"
-log "🔹 当前 KUBECONFIG: ${KUBECONFIG:-/home/$USER/.kube/config}"
-log "🔹 检查 kubectl 可用性..."
-kubectl version --client=true
+echo "🔹 检查 kubectl 可用性..."
+kubectl version --client
+kubectl get nodes
 
-# ---------------------------
-# 检查/创建命名空间
-# ---------------------------
-log "🔹 检查/创建命名空间 $ARCDOC_NAMESPACE..."
-if kubectl get ns "$ARCDOC_NAMESPACE" >/dev/null 2>&1; then
-    log "ℹ️ 命名空间 $ARCDOC_NAMESPACE 已存在"
-else
-    kubectl create ns "$ARCDOC_NAMESPACE"
-    log "✅ 命名空间 $ARCDOC_NAMESPACE 创建成功"
+# -----------------------------
+# 创建命名空间
+# -----------------------------
+echo "🔹 检查/创建命名空间 $ARGOCD_NAMESPACE..."
+kubectl get ns "$ARGOCD_NAMESPACE" >/dev/null 2>&1 || kubectl create ns "$ARGOCD_NAMESPACE"
+echo "ℹ️ namespace $ARGOCD_NAMESPACE 已存在或创建完成"
+
+# -----------------------------
+# 安装 Helm
+# -----------------------------
+if ! command -v helm &>/dev/null; then
+  echo "⚠️ Helm 未安装，正在安装..."
+  curl -sSL https://get.helm.sh/helm-v3.20.0-linux-amd64.tar.gz | tar xz -C /tmp
+  sudo mv /tmp/linux-amd64/helm /usr/local/bin/helm
 fi
 
-# ---------------------------
-# 检查/创建 StorageClass
-# ---------------------------
-log "🔹 检查 StorageClass $STORAGE_CLASS..."
-if kubectl get sc "$STORAGE_CLASS" >/dev/null 2>&1; then
-    log "✅ StorageClass $STORAGE_CLASS 已存在"
-else
-    log "⚠️ StorageClass $STORAGE_CLASS 不存在，正在自动部署 local-path-provisioner..."
-    kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/master/deploy/local-path-storage.yaml
-    log "✅ StorageClass $STORAGE_CLASS 已创建"
-fi
+echo "🔹 Helm 版本信息："
+helm version
 
-# ---------------------------
-# 拉取镜像
-# ---------------------------
-log "🔹 检查本地镜像并拉取缺失镜像..."
-for IMG in "${IMAGES[@]}"; do
-    log "🔹 镜像: $IMG"
-    if sudo ctr -n k8s.io images list | grep -q "$(basename "$IMG")"; then
-        log "✅ 本地已有镜像 $IMG"
-    else
-        log "⚠️ 本地无镜像 $IMG，尝试拉取..."
-        if sudo ctr -n k8s.io images pull "$IMG"; then
-            log "✅ 成功: $IMG"
-        else
-            log "❌ 拉取失败: $IMG"
-        fi
-    fi
-done
-
-# ---------------------------
-# 安装/升级 ArgoCD Helm Chart
-# ---------------------------
-log "🔹 添加 ArgoCD Helm 仓库..."
-helm repo add argo https://argoproj.github.io/argo-helm || true
+echo "🔹 添加 Argo Helm 仓库..."
+helm repo add argo https://argoproj.github.io/argo-helm
 helm repo update
 
-log "🔹 安装/升级 ArgoCD Helm Chart..."
-if helm status "$ARCDOC_RELEASE" -n "$ARCDOC_NAMESPACE" >/dev/null 2>&1; then
-    helm upgrade "$ARCDOC_RELEASE" argo/argo-cd -n "$ARCDOC_NAMESPACE"
+# -----------------------------
+# 检查 StorageClass
+# -----------------------------
+echo "🔹 检查 StorageClass $STORAGECLASS_NAME..."
+if ! kubectl get sc "$STORAGECLASS_NAME" >/dev/null 2>&1; then
+  echo "⚠️ StorageClass $STORAGECLASS_NAME 不存在，正在创建 local-path-provisioner..."
+  kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/master/deploy/local-path-storage.yaml
+  echo "🔹 等待 local-path-provisioner Pod 就绪..."
+  kubectl -n local-path-storage wait --for=condition=Ready pod -l app=local-path-provisioner --timeout=120s
+  echo "✅ StorageClass $STORAGECLASS_NAME 已创建并可用"
 else
-    helm install "$ARCDOC_RELEASE" argo/argo-cd -n "$ARCDOC_NAMESPACE"
+  echo "✅ StorageClass $STORAGECLASS_NAME 已存在"
 fi
 
-# ---------------------------
-# 获取 admin 密码
-# ---------------------------
-PASS=$(kubectl -n "$ARCDOC_NAMESPACE" get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d)
-log "🔑 初始密码: $PASS"
+# -----------------------------
+# 拉取镜像
+# -----------------------------
+echo "🔹 检查/拉取 ArgoCD 相关镜像..."
+for img in "${IMAGES[@]}"; do
+  echo "📥 拉取镜像: $img"
+  if sudo ctr -n k8s.io images pull "$img"; then
+    echo "✅ 成功: $img"
+  else
+    echo "❌ 镜像拉取失败: $img，请检查网络"
+    exit 1
+  fi
+done
+echo "✅ 所有镜像拉取完成"
 
-# ---------------------------
+# -----------------------------
+# 安装 ArgoCD Helm Chart
+# -----------------------------
+echo "🔹 安装 ArgoCD Helm Chart..."
+if helm -n "$ARGOCD_NAMESPACE" status argocd >/dev/null 2>&1; then
+  helm -n "$ARGOCD_NAMESPACE" upgrade argocd argo/argo-cd
+else
+  helm -n "$ARGOCD_NAMESPACE" install argocd argo/argo-cd
+fi
+
+# -----------------------------
+# 修改 ArgoCD Server 为 NodePort
+# -----------------------------
+echo "🔹 设置 ArgoCD Server 服务类型为 NodePort..."
+kubectl -n "$ARGOCD_NAMESPACE" patch svc argocd-server -p '{"spec": {"type": "NodePort"}}'
+NODEPORT=$(kubectl -n "$ARGOCD_NAMESPACE" get svc argocd-server -o jsonpath='{.spec.ports[?(@.port==80)].nodePort}')
+
+# -----------------------------
 # 生成 HTML 登录页
-# ---------------------------
-HTML_FILE="$NAS_DIR/argocd_login.html"
-SERVER_IP=$(hostname -I | awk '{print $1}')
-
-cat > "$HTML_FILE" <<EOF
+# -----------------------------
+ARGOCD_PASSWORD=$(kubectl -n "$ARGOCD_NAMESPACE" get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d)
+cat <<EOF > "$NAS_DIR/argocd_login.html"
 <!DOCTYPE html>
 <html>
 <head>
-<meta charset="UTF-8">
-<title>ArgoCD Login</title>
-<style>
-body { font-family: Arial; background:#0f172a; color:#fff; text-align:center; padding-top:80px; }
-.container { background:#1e293b; width:500px; margin:auto; padding:40px; border-radius:12px; box-shadow:0 0 20px rgba(0,0,0,0.5);}
-h1 { color:#38bdf8; }
-.info { margin-top:20px; font-size:18px; }
-.password { background:#334155; padding:10px; border-radius:6px; font-weight:bold; color:#22c55e; }
-a { color:#facc15; }
-</style>
+    <meta charset="UTF-8">
+    <title>ArgoCD 登录信息</title>
 </head>
 <body>
-<div class="container">
-<h1>🚀 ArgoCD 部署成功</h1>
-<div class="info">
-<p><b>访问地址：</b></p>
-<p><a href="https://${SERVER_IP}:8080" target="_blank">https://${SERVER_IP}:8080</a></p>
-<p><b>账号：</b> admin</p>
-<p><b>密码：</b></p>
-<div class="password">${PASS}</div>
-<p style="margin-top:30px;font-size:14px;color:#94a3b8;">部署时间：$(date)</p>
-</div>
-</div>
+    <h1>ArgoCD 登录信息</h1>
+    <p>URL: <a href="http://$(hostname -I | awk '{print $1}'):$NODEPORT" target="_blank">http://$(hostname -I | awk '{print $1}'):$NODEPORT</a></p>
+    <p>账号: admin</p>
+    <p>密码: $ARGOCD_PASSWORD</p>
 </body>
 </html>
 EOF
-chmod 644 "$HTML_FILE"
-log "🌐 登录页面已生成: $HTML_FILE"
+echo "✅ ArgoCD 登录页已生成: $NAS_DIR/argocd_login.html"
 
-log "🎉 安装完成！所有日志和页面已保存到 $NAS_DIR"
+echo "🎉 ArgoCD 安装完成，访问地址：http://$(hostname -I | awk '{print $1}'):$NODEPORT"
+echo "    账号：admin"
+echo "    密码：$ARGOCD_PASSWORD"
