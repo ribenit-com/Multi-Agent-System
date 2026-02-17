@@ -25,10 +25,12 @@ echo "======================================"
 
 # ======= 1️⃣ 检查 NFS 工具 =======
 if ! command -v mount.nfs >/dev/null 2>&1; then
-    echo "[ERROR] mount.nfs not found. Install with: sudo apt install nfs-common -y"
-    exit 1
+    echo "[INFO] nfs-common not found. Installing..."
+    sudo apt update
+    sudo apt install -y nfs-common
+else
+    echo "[OK] NFS client tools found"
 fi
-echo "[OK] NFS client tools found"
 
 # ======= 2️⃣ 网络检测 =======
 echo "[1] Testing connectivity to TrueNAS..."
