@@ -14,7 +14,7 @@ LOCAL_LOG="/var/log/truenas_nfs_test_${TIMESTAMP}.log"
 exec > >(tee -a "$LOCAL_LOG") 2>&1
 
 echo "======================================"
-echo " TrueNAS NFS Mount Test (auto detect NFS tools)"
+echo " TrueNAS NFS Mount Test (auto fallback)"
 echo " Time       : $(date)"
 echo " Host IP    : $HOST_IP"
 echo " TrueNAS IP : $TRUENAS_IP"
@@ -23,15 +23,14 @@ echo " Local Mount: $LOCAL_MOUNT"
 echo " Log File   : $LOCAL_LOG"
 echo "======================================"
 
-# 1️⃣ 检查 NFS 工具是否安装
+# 1️⃣ 检查 NFS 工具
 if ! command -v mount.nfs >/dev/null 2>&1; then
-    echo "[ERROR] mount.nfs not found. Please install nfs-common:"
-    echo "       sudo apt update && sudo apt install nfs-common -y"
+    echo "[ERROR] mount.nfs not found. Install with: sudo apt install nfs-common -y"
     exit 1
 fi
 echo "[OK] NFS client tools found"
 
-# 2️⃣ 检查网络连通
+# 2️⃣ 网络连通性检测
 echo "[1] Testing connectivity to TrueNAS..."
 if ping -c 3 "$TRUENAS_IP" &>/dev/null; then
     echo "[OK] Network reachable"
@@ -51,11 +50,11 @@ if mountpoint -q "$LOCAL_MOUNT"; then
     sudo umount "$LOCAL_MOUNT" || true
 fi
 
-# 5️⃣ 尝试挂载 NFS
+# 5️⃣ 尝试挂载 NFS，防止阻塞
 MOUNT_SUCCESS=0
-for VER in 4.1 4; do
+for VER in 4.1 4 3; do
     echo "[4] Trying to mount NFS version $VER..."
-    if sudo mount -t nfs -o vers=$VER,rsize=1048576,wsize=1048576,soft,timeo=600,retrans=3,_netdev \
+    if sudo mount -v -t nfs -o vers=$VER,soft,timeo=10,retrans=2,rsize=1048576,wsize=1048576,_netdev \
         "$TRUENAS_IP:$NFS_PATH" "$LOCAL_MOUNT"; then
         echo "[OK] Mounted NFS version $VER successfully"
         MOUNT_SUCCESS=1
@@ -81,7 +80,7 @@ echo "[5] Writing verification file..."
 } > "$VERIFY_FILE"
 echo "[✔] Verification file: $VERIFY_FILE"
 
-# 7️⃣ 生成 JSON 状态文件
+# 7️⃣ 写入 JSON 状态文件
 JSON_FILE="$LOCAL_MOUNT/mount_status_${HOST_IP}_${TIMESTAMP}.json"
 echo "[6] Writing JSON status file..."
 cat > "$JSON_FILE" <<EOF
