@@ -1,5 +1,3 @@
-# 1. 将您上面的完整脚本内容保存到一个新文件中
-# 可以直接在终端中粘贴以下命令（从 cat 开始到最后一个 EOF 结束）
 cat > deploy-n8n-final-run.sh << 'EOF'
 #!/bin/bash
 
@@ -82,7 +80,7 @@ sleep 1
 
 # --- 3. 生成部署 YAML ---
 echo -e "${YELLOW}[3/5] 生成 n8n 部署配置...${NC}"
-cat > n8n-production.yaml << EOF2
+cat > n8n-production.yaml << 'EOF2'
 ---
 apiVersion: v1
 kind: Service
@@ -120,7 +118,7 @@ spec:
         app: n8n
     spec:
       nodeSelector:
-        kubernetes.io/hostname: ${EDGE_NODE}
+        kubernetes.io/hostname: agent01
       tolerations:
       - key: "node-role.kubernetes.io/edge"
         operator: "Exists"
@@ -143,9 +141,9 @@ spec:
         - name: NODE_ENV
           value: "production"
         - name: N8N_HOST
-          value: "${NODE_IP}"
+          value: "192.168.1.20"
         - name: WEBHOOK_URL
-          value: "http://${NODE_IP}:31678"
+          value: "http://192.168.1.20:31678"
         - name: GENERIC_TIMEZONE
           value: "Asia/Shanghai"
         volumeMounts:
@@ -176,7 +174,7 @@ spec:
       volumes:
       - name: n8n-data
         hostPath:
-          path: ${STORAGE_PATH}
+          path: /data/n8n
           type: DirectoryOrCreate
 EOF2
 
@@ -221,13 +219,13 @@ echo -e "${GREEN}✅ n8n 部署完成！${NC}"
 echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
 echo ""
 echo -e "${CYAN}📦 部署信息${NC}"
-echo -e "  ${BLUE}•${NC} 边缘节点:    ${GREEN}${EDGE_NODE}${NC}"
-echo -e "  ${BLUE}•${NC} 节点 IP:      ${GREEN}${NODE_IP}${NC}"
-echo -e "  ${BLUE}•${NC} 数据目录:     ${GREEN}${STORAGE_PATH}${NC}"
+echo -e "  ${BLUE}•${NC} 边缘节点:    ${GREEN}agent01${NC}"
+echo -e "  ${BLUE}•${NC} 节点 IP:      ${GREEN}192.168.1.20${NC}"
+echo -e "  ${BLUE}•${NC} 数据目录:     ${GREEN}/data/n8n${NC}"
 echo ""
 echo -e "${CYAN}🌐 访问地址${NC}"
 echo -e "  ${BLUE}•${NC} 集群内访问:  ${GREEN}http://n8n-service:5678${NC}"
-echo -e "  ${BLUE}•${NC} NodePort 访问: ${GREEN}http://${NODE_IP}:31678${NC}"
+echo -e "  ${BLUE}•${NC} NodePort 访问: ${GREEN}http://192.168.1.20:31678${NC}"
 echo ""
 echo -e "${CYAN}🔧 管理命令 (在控制中心执行)${NC}"
 echo -e "  ${BLUE}•${NC} 查看 Pod:     ${YELLOW}kubectl get pods -l app=n8n -o wide${NC}"
@@ -251,8 +249,6 @@ fi
 exit 0
 EOF
 
-# 2. 给脚本添加执行权限
 chmod +x deploy-n8n-final-run.sh
-
-# 3. 运行脚本（这次一定会看到详细的输出）
-./deploy-n8n-final-run.sh
+echo -e "${GREEN}✅ 脚本已创建并赋予执行权限。${NC}"
+echo -e "${YELLOW}现在运行脚本：${NC} ./deploy-n8n-final-run.sh"
