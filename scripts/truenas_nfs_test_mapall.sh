@@ -2,6 +2,9 @@
 set -e
 
 # ======= 配置区 =======
+SCRIPT_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/truenas_nfs_test_mapall.sh"
+SCRIPT_PATH="$HOME/truenas_nfs_product.sh"
+
 TRUENAS_IP="192.168.1.6"
 NFS_PATH="/mnt/Agent-Ai/CSV_Data/Multi-Agent-Log"
 LOCAL_MOUNT="/mnt/truenas"
@@ -10,7 +13,26 @@ TIMESTAMP=$(date +%F_%H%M%S)
 HOST_IP=$(hostname -I | awk '{print $1}')
 LOCAL_LOG="/var/log/truenas_nfs_mount_${TIMESTAMP}.log"
 
-# 日志输出到控制台和文件
+# ======= 0️⃣ 自动更新自身 =======
+echo "Checking for latest script version..."
+wget -q -O "$SCRIPT_PATH.tmp" "$SCRIPT_URL"
+if [ -f "$SCRIPT_PATH" ]; then
+    DIFF=$(diff "$SCRIPT_PATH" "$SCRIPT_PATH.tmp" || true)
+    if [ -n "$DIFF" ]; then
+        echo "[INFO] Updating script to latest version..."
+        mv "$SCRIPT_PATH.tmp" "$SCRIPT_PATH"
+        chmod +x "$SCRIPT_PATH"
+    else
+        echo "[OK] Script is already up-to-date"
+        rm -f "$SCRIPT_PATH.tmp"
+    fi
+else
+    echo "[INFO] Installing script for the first time..."
+    mv "$SCRIPT_PATH.tmp" "$SCRIPT_PATH"
+    chmod +x "$SCRIPT_PATH"
+fi
+
+# ======= 日志输出到控制台和文件 =======
 exec > >(tee -a "$LOCAL_LOG") 2>&1
 
 echo "======================================"
