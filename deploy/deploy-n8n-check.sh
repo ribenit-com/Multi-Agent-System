@@ -1,16 +1,17 @@
 #!/bin/bash
 # ============================================
-# n8n 一键部署脚本 (稳定版)
-# 版本: 4.2.0
-# 适用环境: KubeEdge + Containerd
-# 执行位置: 直接在 agent01 节点上执行（Edge 节点）
+# n8n 一键部署脚本（稳定版，含环境检查）
+# 版本: 4.3.0
+# 执行位置: 控制中心 (cmaster01)
+# 依赖: 控制中心已连接 KubeEdge 节点 agent01
 # ============================================
 
 set -e
 
 # -------------------------------
-# 配置区域（可根据实际修改）
-NODE_IP="192.168.1.20"   # agent01 节点 IP
+# 配置区域
+EDGE_NODE="agent01"
+NODE_IP="192.168.1.20"
 NODEPORT=31678
 STORAGE_PATH="/data/n8n"
 NAMESPACE="default"
@@ -23,17 +24,14 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-# 打印标题
-clear
 echo -e "${BLUE}╔════════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║          n8n 一键部署脚本 v4.2.0         ║${NC}"
-echo -e "${BLUE}║   直接在 agent01 节点执行，无需 SSH       ║${NC}"
+echo -e "${BLUE}║       n8n 一键部署 + 环境检查 v4.3.0      ║${NC}"
 echo -e "${BLUE}╚════════════════════════════════════════════╝${NC}"
 echo ""
 
 # -------------------------------
-# 步骤1: 检查 kubectl 和节点状态
-echo -e "${YELLOW}[1/5] 检查 kubectl 和节点状态...${NC}"
+# 步骤1: 检查控制中心环境
+echo -e "${YELLOW}[1/5] 检查控制中心环境...${NC}"
 
 if ! command -v kubectl &> /dev/null; then
     echo -e "${RED}✗ kubectl 未安装${NC}"
@@ -41,27 +39,41 @@ if ! command -v kubectl &> /dev/null; then
 fi
 echo -e "${GREEN}✓ kubectl 已安装${NC}"
 
-NODE_READY=$(kubectl get node -o jsonpath='{.items[?(@.metadata.name=="agent01")].status.conditions[?(@.type=="Ready")].status}')
+if ! kubectl get nodes &> /dev/null; then
+    echo -e "${RED}✗ 无法连接到 Kubernetes 集群${NC}"
+    exit 1
+fi
+echo -e "${GREEN}✓ 集群连接正常${NC}"
+echo ""
+
+# -------------------------------
+# 步骤2: 检查边缘节点环境
+echo -e "${YELLOW}[2/5] 检查边缘节点环境: ${EDGE_NODE}${NC}"
+
+NODE_READY=$(kubectl get node ${EDGE_NODE} -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}')
 if [ "$NODE_READY" != "True" ]; then
-    echo -e "${RED}✗ 节点 agent01 状态不是 Ready (当前: ${NODE_READY})${NC}"
-    echo "请在 agent01 上检查 kubelet 和 edgecore 服务是否正常"
+    echo -e "${RED}✗ 节点 ${EDGE_NODE} 状态不是 Ready (当前: ${NODE_READY})${NC}"
     exit 1
 fi
 echo -e "${GREEN}✓ 节点 Ready${NC}"
+
+# 检查数据目录是否存在
+kubectl run n8n-dir-check --rm -i --restart=Never \
+  --image=busybox --overrides="{
+  \"spec\": {
+    \"nodeName\": \"${EDGE_NODE}\",
+    \"containers\":[{
+      \"name\":\"check\",
+      \"image\":\"busybox\",
+      \"command\":[\"sh\",\"-c\",\"if [ ! -d '${STORAGE_PATH}' ]; then mkdir -p '${STORAGE_PATH}' && chmod 777 '${STORAGE_PATH}'; fi; echo OK\"] 
+    }]
+  }
+}" >/dev/null 2>&1
+echo -e "${GREEN}✓ 数据目录检查/创建完成: ${STORAGE_PATH}${NC}"
 echo ""
 
 # -------------------------------
-# 步骤2: 创建数据目录
-echo -e "${YELLOW}[2/5] 创建数据目录: ${STORAGE_PATH}${NC}"
-
-sudo mkdir -p ${STORAGE_PATH}
-sudo chmod 777 ${STORAGE_PATH}
-
-echo -e "${GREEN}✓ 数据目录已准备好${NC}"
-echo ""
-
-# -------------------------------
-# 步骤3: 创建 NodePort 服务
+# 步骤3: 创建 Service
 echo -e "${YELLOW}[3/5] 创建 n8n Service...${NC}"
 
 kubectl apply -f - <<EOF
@@ -79,7 +91,6 @@ spec:
       targetPort: 5678
       nodePort: ${NODEPORT}
 EOF
-
 echo -e "${GREEN}✓ Service 已创建${NC}"
 echo ""
 
@@ -104,7 +115,7 @@ spec:
         app: n8n
     spec:
       nodeSelector:
-        kubernetes.io/hostname: agent01
+        kubernetes.io/hostname: ${EDGE_NODE}
       tolerations:
       - key: "node-role.kubernetes.io/edge"
         operator: "Exists"
@@ -141,7 +152,6 @@ spec:
         hostPath:
           path: ${STORAGE_PATH}
 EOF
-
 echo -e "${GREEN}✓ Deployment 已创建${NC}"
 echo ""
 
@@ -150,7 +160,7 @@ echo ""
 echo -e "${YELLOW}[5/5] 等待 Pod 就绪...${NC}"
 
 kubectl wait --for=condition=ready pod -l app=n8n --timeout=180s || \
-echo -e "${RED}⚠ Pod 未能在 180 秒内就绪，可能节点资源不足或目录权限问题${NC}"
+echo -e "${RED}⚠ Pod 未能在 180 秒内就绪${NC}"
 
 POD_NAME=$(kubectl get pods -l app=n8n -o jsonpath='{.items[0].metadata.name}')
 
