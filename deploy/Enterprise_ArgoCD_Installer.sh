@@ -1,85 +1,101 @@
 #!/bin/bash
 # ==================================================================
-# 🤖 企业级 ArgoCD 安装脚本 - 本地 PVC + 可选备份同步
-# 安装在 Kubernetes Pod 内，生产环境推荐 Helm
+# 🤖 企业级 ArgoCD 安装器（增强调试版）
+# 自动检查集群、kubectl、Helm、存储，输出详细日志
 # ==================================================================
 
 set -euo pipefail
 
-# ---------------- 配置 ----------------
+LOG_FILE="/tmp/Enterprise_ArgoCD_Installer_$(date +%Y%m%d_%H%M%S).log"
+echo "🔹 安装日志输出到 $LOG_FILE"
+
+log() { echo -e "$1" | tee -a "$LOG_FILE"; }
+
 ARGO_NAMESPACE="argocd"
 PVC_SIZE="10Gi"
-STORAGE_CLASS="local-storage"   # 本地存储类，企业推荐用节点本地卷
+STORAGE_CLASS="local-path"  # 改成你的存储类
 HELM_RELEASE_NAME="argocd"
 HELM_CHART="argo/argo-cd"
 HELM_REPO="https://argoproj.github.io/argo-helm"
-NAS_BACKUP_DIR="/mnt/truenas/argocd-backup"  # 可选同步目录
 
-# ---------------- 前置检查 ----------------
-echo "🔹 检查 kubectl..."
-kubectl version --short &>/dev/null || { echo "❌ kubectl 不可用"; exit 1; }
-kubectl cluster-info &>/dev/null || { echo "❌ 无法访问集群"; exit 1; }
+log "🔹 当前节点 IP: $(hostname -I | awk '{print $1}')"
 
-echo "🔹 检查 Helm..."
-if ! command -v helm &>/dev/null; then
-    echo "⚠️ Helm 未安装，正在安装..."
-    curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+# ---------------- 检查 kubectl ----------------
+log "🔹 检查 kubectl 可用性..."
+if ! command -v kubectl >/dev/null 2>&1; then
+    log "❌ kubectl 未安装，请先安装 kubectl"
+    exit 1
 fi
 
-echo "🔹 创建命名空间 $ARGO_NAMESPACE..."
+log "🔹 kubectl 版本信息："
+kubectl version --client=true | tee -a "$LOG_FILE"
+
+log "🔹 测试访问集群..."
+if ! kubectl cluster-info &>/dev/null; then
+    log "❌ 无法访问 Kubernetes 集群，请检查 KUBECONFIG 和网络"
+    log "当前 KUBECONFIG: ${KUBECONFIG:-未设置}"
+    exit 1
+fi
+kubectl get nodes -o wide | tee -a "$LOG_FILE"
+
+# ---------------- 创建命名空间 ----------------
+log "🔹 检查/创建命名空间 $ARGO_NAMESPACE..."
 if ! kubectl get namespace "$ARGO_NAMESPACE" &>/dev/null; then
     kubectl create namespace "$ARGO_NAMESPACE"
-    echo "✅ 命名空间 $ARGO_NAMESPACE 创建成功"
+    log "✅ 命名空间 $ARGO_NAMESPACE 创建成功"
 else
-    echo "ℹ️ 命名空间 $ARGO_NAMESPACE 已存在"
+    log "ℹ️ 命名空间 $ARGO_NAMESPACE 已存在"
 fi
 
-echo "🔹 添加 Argo Helm 仓库..."
-helm repo add argo $HELM_REPO || true
-helm repo update
+# ---------------- Helm 安装 ----------------
+if ! command -v helm >/dev/null 2>&1; then
+    log "⚠️ Helm 未安装，正在安装..."
+    curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash | tee -a "$LOG_FILE"
+fi
 
-echo "🔹 检查存储类 $STORAGE_CLASS..."
+log "🔹 Helm 版本信息："
+helm version | tee -a "$LOG_FILE"
+
+# 添加 Argo Helm 仓库
+if ! helm repo list | grep -q "^argo"; then
+    log "🔹 添加 Argo Helm 仓库..."
+    helm repo add argo "$HELM_REPO"
+fi
+helm repo update | tee -a "$LOG_FILE"
+
+# ---------------- 检查存储类 ----------------
+log "🔹 检查存储类 $STORAGE_CLASS..."
 if ! kubectl get sc "$STORAGE_CLASS" &>/dev/null; then
-    echo "❌ 存储类 $STORAGE_CLASS 不存在"; exit 1
+    log "❌ 存储类 $STORAGE_CLASS 不存在，请先创建 StorageClass"
+    kubectl get sc | tee -a "$LOG_FILE"
+    exit 1
+else
+    log "✅ 存储类 $STORAGE_CLASS 可用"
 fi
 
 # ---------------- 安装 ArgoCD ----------------
-echo "🔹 安装 ArgoCD..."
-helm upgrade --install $HELM_RELEASE_NAME $HELM_CHART \
-    --namespace $ARGO_NAMESPACE \
+log "🔹 安装 ArgoCD..."
+helm upgrade --install "$HELM_RELEASE_NAME" "$HELM_CHART" \
+    --namespace "$ARGO_NAMESPACE" \
     --wait \
-    --timeout 5m \
     --set server.service.type=LoadBalancer \
     --set server.ingress.enabled=true \
     --set server.ingress.hosts[0]=argocd.example.com \
     --set server.persistence.enabled=true \
-    --set server.persistence.size=$PVC_SIZE \
-    --set server.persistence.storageClass=$STORAGE_CLASS \
-    --set server.persistence.persistentVolumeReclaimPolicy=Retain
-
-# ---------------- 等待 Pod 就绪 ----------------
-echo "🔹 等待 ArgoCD Server Pod 启动..."
-kubectl -n $ARGO_NAMESPACE wait --for=condition=ready pod -l app.kubernetes.io/name=argocd-server --timeout=180s
+    --set server.persistence.size="$PVC_SIZE" \
+    --set server.persistence.storageClass="$STORAGE_CLASS" | tee -a "$LOG_FILE"
 
 # ---------------- 获取初始密码 ----------------
-INITIAL_PASSWORD=$(kubectl -n $ARGO_NAMESPACE get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 --decode)
-
-# ---------------- 可选 NAS 备份 ----------------
-if [ -d "$NAS_BACKUP_DIR" ]; then
-    echo "🔹 同步 PVC 数据到 NAS..."
-    # 简单示例：rsync 同步本地 PVC 挂载目录到 NAS
-    # 注意：这里假设本地 PVC 挂载路径已知，例如 /mnt/local-argocd
-    LOCAL_PVC_PATH="/mnt/local-argocd"
-    rsync -avh --delete "$LOCAL_PVC_PATH/" "$NAS_BACKUP_DIR/"
-    echo "✅ 数据同步完成"
+log "🔹 获取 ArgoCD 初始密码..."
+if kubectl -n "$ARGO_NAMESPACE" get secret argocd-initial-admin-secret &>/dev/null; then
+    INITIAL_PASSWORD=$(kubectl -n "$ARGO_NAMESPACE" get secret argocd-initial-admin-secret \
+        -o jsonpath="{.data.password}" | base64 --decode)
+    log "✅ ArgoCD 安装完成"
+    log "URL: https://argocd.example.com"
+    log "初始账号: admin"
+    log "初始密码: $INITIAL_PASSWORD"
+else
+    log "❌ 未找到 argocd-initial-admin-secret，请检查 Helm 安装状态"
 fi
 
-# ---------------- 完成提示 ----------------
-echo "✅ ArgoCD 企业级安装完成"
-echo "URL: https://argocd.example.com"
-echo "初始账号: admin"
-echo "初始密码: $INITIAL_PASSWORD"
-
-echo "💡 提示："
-echo "- 本地 PVC 使用 Retain 策略，Pod 删除数据不丢失"
-echo "- 如需备份到 NAS，请确保 NAS 挂载并在 NAS_BACKUP_DIR 设置正确路径"
+log "🔹 安装完成，详细日志请查看 $LOG_FILE"
