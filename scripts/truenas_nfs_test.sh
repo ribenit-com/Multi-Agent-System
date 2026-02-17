@@ -5,7 +5,7 @@ set -e
 TRUENAS_IP="192.168.1.6"
 NFS_PATH="/mnt/Agent-Ai/CSV_Data/Multi-Agent-Log"
 LOCAL_MOUNT="/mnt/truenas"
-LINUX_USER="kubeadmin" # 写入账户
+LINUX_USER="zuandilong" # 写入账户
 UID_GID=$(id -u $LINUX_USER):$(id -g $LINUX_USER)
 
 TIMESTAMP=$(date +%F_%H%M%S)
