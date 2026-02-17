@@ -1,109 +1,84 @@
 #!/bin/bash
 # ============================================================
-# 🚀 Enterprise Edge ArgoCD Offline Installer
-# For Kubernetes + containerd
-# NAS 仅存日志与离线镜像
+# 🚀 ArgoCD v2.9.1 安装脚本（DaoCloud 加速源）
+# 适用于 containerd + Kubernetes
 # ============================================================
 
-set -e
+set -euo pipefail
 
-#########################
-# 基础变量
-#########################
-
-ARGO_VERSION="v2.9.1"
-ARGO_NAMESPACE="argocd"
-STORAGE_CLASS="local-path"
-NAS_DIR="/mnt/truenas/logs"
-LOG_FILE="$NAS_DIR/ArgoCD_Install_$(date +%Y%m%d_%H%M%S).log"
-
-mkdir -p "$NAS_DIR"
+LOG_FILE="/tmp/argocd_install_$(date +%Y%m%d_%H%M%S).log"
 
 log() {
     echo "[$(date '+%F %T')] $1" | tee -a "$LOG_FILE"
 }
 
-log "🚀 开始企业级 ArgoCD 离线安装"
+log "🚀 开始 ArgoCD 安装"
 log "📄 日志文件: $LOG_FILE"
 
-#########################
-# 权限检测
-#########################
+############################
+# 权限检查
+############################
 
 if [ "$EUID" -ne 0 ]; then
-    log "❌ 请使用 sudo 运行脚本"
+    log "❌ 请使用 sudo 运行该脚本"
     exit 1
 fi
 
-#########################
-# 检查集群
-#########################
-
-log "🔹 检查 Kubernetes 集群状态"
-kubectl cluster-info | tee -a "$LOG_FILE"
-kubectl get nodes -o wide | tee -a "$LOG_FILE"
-
-#########################
-# 创建 Namespace
-#########################
-
-if ! kubectl get ns $ARGO_NAMESPACE &>/dev/null; then
-    kubectl create ns $ARGO_NAMESPACE
-    log "✅ Namespace 创建成功"
-else
-    log "ℹ️ Namespace 已存在"
-fi
-
-#########################
-# StorageClass 检查
-#########################
-
-if ! kubectl get sc $STORAGE_CLASS &>/dev/null; then
-    log "⚠️ StorageClass 不存在，正在部署 local-path"
-    kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/master/deploy/local-path-storage.yaml
-    kubectl -n local-path-storage wait --for=condition=ready pod -l app=local-path-provisioner --timeout=180s
-    log "✅ local-path 已创建"
-else
-    log "✅ StorageClass 已存在"
-fi
-
-#########################
-# 预拉镜像（加速源）
-#########################
+############################
+# 需要拉取的镜像
+############################
 
 IMAGES=(
-"m.daocloud.io/docker.io/argoproj/argocd:${ARGO_VERSION}|argocd_${ARGO_VERSION}.tar"
-"m.daocloud.io/docker.io/redis:7-alpine|redis_7-alpine.tar"
-"m.daocloud.io/docker.io/jimmidyson/configmap-reload:v0.8.0|configmap-reload_v0.8.0.tar"
+"m.daocloud.io/quay.io/argoproj/argocd:v2.9.1"
+"docker.m.daocloud.io/library/redis:7.0.14-alpine"
+"ghcr.m.daocloud.io/dexidp/dex:v2.37.0"
+"m.daocloud.io/docker.io/jimmidyson/configmap-reload:v0.8.0"
+"m.daocloud.io/docker.io/library/alpine:latest"
 )
 
-log "📥 开始预拉 ArgoCD 所需镜像"
+############################
+# 拉取镜像
+############################
 
-for item in "${IMAGES[@]}"; do
-    IMG_SRC="${item%%|*}"
-    IMG_FILE="${item##*|}"
+log "📥 开始拉取镜像到 containerd"
 
-    log "🔹 拉取镜像: $IMG_SRC"
-
-    if ctr -n k8s.io images pull "$IMG_SRC"; then
-        log "📦 导出到 NAS: $NAS_DIR/$IMG_FILE"
-        ctr -n k8s.io images export "$NAS_DIR/$IMG_FILE" "$IMG_SRC"
-        chmod 644 "$NAS_DIR/$IMG_FILE"
-        log "✅ 完成: $IMG_SRC"
+for IMG in "${IMAGES[@]}"; do
+    log "🔹 拉取: $IMG"
+    if ctr -n k8s.io images pull "$IMG" | tee -a "$LOG_FILE"; then
+        log "✅ 成功: $IMG"
     else
-        log "❌ 拉取失败: $IMG_SRC"
+        log "❌ 拉取失败: $IMG"
         exit 1
     fi
 done
 
-#########################
-# Helm 安装
-#########################
+log "✅ 所有镜像拉取完成"
 
-log "🔹 检查 Helm"
+############################
+# Kubernetes 检查
+############################
+
+log "🔹 检查集群状态"
+kubectl cluster-info | tee -a "$LOG_FILE"
+kubectl get nodes -o wide | tee -a "$LOG_FILE"
+
+############################
+# 创建 namespace
+############################
+
+if ! kubectl get ns argocd &>/dev/null; then
+    kubectl create ns argocd
+    log "✅ 创建 namespace argocd"
+else
+    log "ℹ️ namespace argocd 已存在"
+fi
+
+############################
+# Helm 安装
+############################
 
 if ! command -v helm &>/dev/null; then
-    log "⚠️ Helm 未安装，正在安装"
+    log "⚠️ Helm 未安装，开始安装..."
     curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 fi
 
@@ -113,29 +88,28 @@ helm repo update
 log "🚀 安装 ArgoCD"
 
 helm upgrade --install argocd argo/argo-cd \
-  --namespace $ARGO_NAMESPACE \
-  --set global.image.repository=argoproj/argocd \
-  --set global.image.tag=${ARGO_VERSION} \
+  --namespace argocd \
+  --wait \
   --set global.image.pullPolicy=IfNotPresent \
+  --set server.image.repository=quay.io/argoproj/argocd \
+  --set server.image.tag=v2.9.1 \
   --set redis.image.repository=redis \
-  --set redis.image.tag=7-alpine \
-  --wait | tee -a "$LOG_FILE"
+  --set redis.image.tag=7.0.14-alpine \
+  --set dex.image.repository=dexidp/dex \
+  --set dex.image.tag=v2.37.0 \
+  --set configmap.reload.image.repository=jimmidyson/configmap-reload \
+  --set configmap.reload.image.tag=v0.8.0 \
+  | tee -a "$LOG_FILE"
 
-#########################
+############################
 # 获取初始密码
-#########################
+############################
 
 sleep 5
 
-if kubectl -n $ARGO_NAMESPACE get secret argocd-initial-admin-secret &>/dev/null; then
-    PASS=$(kubectl -n $ARGO_NAMESPACE get secret argocd-initial-admin-secret \
-      -o jsonpath="{.data.password}" | base64 --decode)
+PASS=$(kubectl -n argocd get secret argocd-initial-admin-secret \
+  -o jsonpath="{.data.password}" | base64 --decode)
 
-    log "🎉 ArgoCD 安装成功"
-    log "👤 用户名: admin"
-    log "🔑 初始密码: $PASS"
-else
-    log "⚠️ 未获取到初始密码，请检查 Pod 状态"
-fi
-
-log "🏁 安装流程结束"
+log "🎉 ArgoCD 安装完成"
+log "👤 admin"
+log "🔑 初始密码: $PASS"
