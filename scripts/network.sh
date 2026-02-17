@@ -1,4 +1,5 @@
 #!/bin/bash
+# network.sh: 二级菜单示例
 
 # 脚本数组：name:description:command
 options=(
@@ -6,21 +7,45 @@ options=(
     "check_iface:查看网卡信息:ifconfig"
 )
 
-echo "== 网络运维 =="
-i=1
-for opt in "${options[@]}"; do
-    name=$(echo "$opt" | cut -d':' -f1)
-    desc=$(echo "$opt" | cut -d':' -f2)
-    echo "$i) $name - $desc"
-    ((i++))
-done
+# 显示二级菜单并选择
+function select_script() {
+    local idx=0
+    while true; do
+        clear
+        echo "== 网络运维脚本 =="
+        for i in "${!options[@]}"; do
+            name=$(echo "${options[$i]}" | cut -d':' -f1)
+            desc=$(echo "${options[$i]}" | cut -d':' -f2)
+            if [ $i -eq $idx ]; then
+                echo -e "➤ $name - $desc"
+            else
+                echo "  $name - $desc"
+            fi
+        done
+        echo
+        echo "↑/↓选择  Enter执行  q返回上级"
 
-read -p "选择脚本编号: " choice
-if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "${#options[@]}" ]; then
-    echo "选择无效"
-    exit 1
-fi
+        # 读取按键
+        read -rsn1 key
+        if [[ $key == $'\x1b' ]]; then
+            read -rsn2 key
+            if [[ $key == '[A' ]]; then  # 上
+                ((idx--))
+                [ $idx -lt 0 ] && idx=$((${#options[@]}-1))
+            elif [[ $key == '[B' ]]; then  # 下
+                ((idx++))
+                [ $idx -ge ${#options[@]} ] && idx=0
+            fi
+        elif [[ $key == "" ]]; then  # Enter
+            cmd=$(echo "${options[$idx]}" | cut -d':' -f3)
+            clear
+            echo "执行: $cmd"
+            eval "$cmd"
+            read -p "按任意键返回..." -n1
+        elif [[ $key == "q" ]]; then
+            break
+        fi
+    done
+}
 
-cmd=$(echo "${options[$((choice-1))]}" | cut -d':' -f3)
-echo "执行: $cmd"
-eval "$cmd"
+select_script
