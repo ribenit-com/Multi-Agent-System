@@ -1,24 +1,23 @@
 #!/bin/bash
 # ==================================================================
 # 🤖 企业级 ArgoCD 安装器（增强版）
-# 1. 检查 kubectl、Helm
-# 2. 检查/创建 StorageClass
-# 3. 检查本地 ArgoCD 镜像，如果没有拉取
-# 4. Helm 安装 ArgoCD
-# 5. 日志输出到 NAS
+# 适用于边缘节点 Kubernetes 集群，Pod 本地化，日志输出到 NAS
+# 自动创建 StorageClass、命名空间，检查本地镜像
 # ==================================================================
 
 set -euo pipefail
 
 # ---------------- 配置 ----------------
-LOG_FILE="/mnt/truenas/logs/Enterprise_ArgoCD_Installer_$(date +%Y%m%d_%H%M%S).log"
+NAS_LOG_DIR="/mnt/truenas/logs"
+mkdir -p "$NAS_LOG_DIR"
+LOG_FILE="$NAS_LOG_DIR/Enterprise_ArgoCD_Installer_$(date +%Y%m%d_%H%M%S).log"
 echo "🔹 安装日志输出到 $LOG_FILE"
 
-log() { echo -e "$1" | tee -a "$LOG_FILE"; }
+log() { echo -e "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"; }
 
 ARGO_NAMESPACE="argocd"
 PVC_SIZE="10Gi"
-STORAGE_CLASS="local-path"
+STORAGE_CLASS="local-path"  # Pod 本地卷
 HELM_RELEASE_NAME="argocd"
 HELM_CHART="argo/argo-cd"
 HELM_REPO="https://argoproj.github.io/argo-helm"
@@ -30,17 +29,21 @@ log "🔹 当前 KUBECONFIG: ${KUBECONFIG:-~/.kube/config}"
 # ---------------- 检查 kubectl ----------------
 log "🔹 检查 kubectl 可用性..."
 if ! command -v kubectl >/dev/null 2>&1; then
-    log "❌ kubectl 未安装，请先安装"
+    log "❌ kubectl 未安装，请先安装 kubectl"
     exit 1
 fi
+
+log "🔹 kubectl 版本信息："
 kubectl version --client=true | tee -a "$LOG_FILE"
 
-# 测试集群访问
 log "🔹 测试访问集群..."
-kubectl cluster-info | tee -a "$LOG_FILE"
+if ! kubectl cluster-info &>/dev/null; then
+    log "❌ 无法访问 Kubernetes 集群，请检查 KUBECONFIG 和网络"
+    exit 1
+fi
 kubectl get nodes -o wide | tee -a "$LOG_FILE"
 
-# ---------------- 检查/创建命名空间 ----------------
+# ---------------- 创建命名空间 ----------------
 log "🔹 检查/创建命名空间 $ARGO_NAMESPACE..."
 if ! kubectl get namespace "$ARGO_NAMESPACE" &>/dev/null; then
     kubectl create namespace "$ARGO_NAMESPACE"
@@ -54,34 +57,45 @@ if ! command -v helm >/dev/null 2>&1; then
     log "⚠️ Helm 未安装，正在安装..."
     curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash | tee -a "$LOG_FILE"
 fi
+
+log "🔹 Helm 版本信息："
 helm version | tee -a "$LOG_FILE"
 
-# 添加 Helm 仓库
+# 添加 Argo Helm 仓库
 if ! helm repo list | grep -q "^argo"; then
     log "🔹 添加 Argo Helm 仓库..."
     helm repo add argo "$HELM_REPO"
 fi
 helm repo update | tee -a "$LOG_FILE"
 
-# ---------------- 检查/创建 StorageClass ----------------
+# ---------------- StorageClass ----------------
 log "🔹 检查 StorageClass $STORAGE_CLASS..."
 if ! kubectl get sc "$STORAGE_CLASS" &>/dev/null; then
-    log "⚠️ StorageClass $STORAGE_CLASS 不存在，正在创建 local-path-provisioner..."
+    log "⚠️ StorageClass $STORAGE_CLASS 不存在，正在自动部署 local-path-provisioner..."
     kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/master/deploy/local-path-storage.yaml | tee -a "$LOG_FILE"
     log "🔹 等待 local-path-provisioner Pod 就绪..."
-    kubectl -n local-path-storage wait --for=condition=ready pod -l app=local-path-provisioner --timeout=180s
+    kubectl -n local-path-storage wait --for=condition=ready pod -l app=local-path-provisioner --timeout=180s | tee -a "$LOG_FILE"
     log "✅ StorageClass $STORAGE_CLASS 已创建并可用"
 else
     log "✅ StorageClass $STORAGE_CLASS 已存在"
 fi
 
-# ---------------- 检查本地镜像 ----------------
-log "🔹 检查本地是否已有 ArgoCD 镜像 $ARGO_IMAGE"
-if ! sudo ctr -n k8s.io images ls | grep -q "${ARGO_IMAGE##*/}"; then
-    log "⚠️ 本地无镜像，使用 sudo 拉取..."
-    sudo ctr -n k8s.io image pull "$ARGO_IMAGE" | tee -a "$LOG_FILE"
+# ---------------- 镜像检查 ----------------
+log "🔹 检查本地是否已有 ArgoCD 镜像 $ARGO_IMAGE ..."
+if [ ! -S /run/containerd/containerd.sock ] || [ ! -r /run/containerd/containerd.sock ]; then
+    log "❌ 无法访问 containerd socket /run/containerd/containerd.sock"
+    log "   可能是权限问题，请以 root 用户运行脚本，或者将用户加入 containerd 组"
+    exit 1
+fi
+
+if ! sudo ctr -n k8s.io images list | grep -q "$(basename $ARGO_IMAGE)"; then
+    log "⚠️ 本地无 ArgoCD 镜像，正在拉取 $ARGO_IMAGE ..."
+    if ! sudo ctr -n k8s.io images pull $ARGO_IMAGE | tee -a "$LOG_FILE"; then
+        log "❌ 镜像拉取失败，请检查网络和镜像仓库地址"
+        exit 1
+    fi
 else
-    log "✅ 本地已有 ArgoCD 镜像"
+    log "✅ 本地已存在镜像 $ARGO_IMAGE"
 fi
 
 # ---------------- 安装 ArgoCD ----------------
