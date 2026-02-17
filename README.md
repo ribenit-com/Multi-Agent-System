@@ -65,15 +65,4 @@
 ## 🔍 快速导航
 
 ```bash
-# 想部署 n8n？
-cd deploy/n8n/
-./deploy-n8n-stable.sh
-
-# 想看架构设计？
-open docs/architecture/system-design.md
-
-# 遇到问题？
-cat docs/operations/troubleshooting.md
-
-# 想贡献代码？
-cat docs/development/contribute.md
+K8s & KubeEdge 集群健康体检报告 (Pre-Deployment)报告状态：待执行 | 目标环境：中央控制器 (192.168.1.10) & 边缘节点 (192.168.1.0/24)🏗️ 1. 环境概览 (Inventory)维度配置详情操作系统Ubuntu (Central Controller)集群架构Kubernetes + KubeEdge (Cloud/Edge 模式)控制中心 IP192.168.1.10边缘网段192.168.1.0/24外部存储TrueNAS (SMB/NFS)日志路径\\TRUENAS\Multi-Agent-Log (User: zdl)监控工具k9s📋 2. 体检项目清单📡 2.1 网络连通性 (Networking)[ ] 双向 Ping 测试：主机与所有边缘机 192.168.1.x 互通，延迟需处于稳定区间。[ ] KubeEdge 隧道端口：确认控制中心的 10000 (CloudHub) 和 10002 (Quic/WebSocket) 端口未被防火墙拦截。[ ] DNS 健康度：检查 CoreDNS Pod 状态，确保边缘 Pod 能够解析云端 Service。🔌 2.2 边缘握手状态 (Edge Connectivity)[ ] 节点状态：执行 kubectl get nodes，确认边缘节点显示为 Ready。[ ] 离线检测：检查 edgecore 是否存在频繁重连（查看日志：journalctl -u edgecore -n 100）。[ ] 影子状态：通过 kubectl get devices (如已装 DeviceTwin) 检查设备同步是否正常。🛡️ 2.3 硬件资源 (Hardware)[ ] CPU/内存负载：主机与边缘端的资源占用率（建议预留 30% 以上余量以应对突发调度）。[ ] 磁盘空间：主机：/var/lib/kubelet 剩余容量。边缘：/var/lib/edged 所在分区容量。[ ] 时间同步：确保云端与边缘端时间一致（NTP 状态），否则会导致证书校验失败。⚙️ 2.4 配置确认 (Configuration)[ ] 存储挂载：验证 \\TRUENAS 是否已挂载。命令：mount | grep -i truenas写权限测试：touch /path/to/truenas/test_file && rm /path/to/truenas/test_file[ ] 运行时状态：docker ps 或 crictl ps 确保容器引擎运行正常。🚀 2.5 K8s 服务状态 (Core Services)[ ] System Pods：在 k9s 中查看 kube-system 命名空间，确认所有 Pod 处于 Running。[ ] KubeEdge CloudCore：确认云端核心进程无重启记录。🛠️ 3. 准备工作检查 (Pre-installation)在部署新的 Multi-Agent Pod 之前，请确认以下配置：污点与容忍度：边缘节点是否有 node-role.kubernetes.io/edge 污点？Pod 定义中是否已添加对应的 tolerations？日志写入权限：确保 Pod 内运行的用户（UID）对 TrueNAS 挂载目录有写入权限。📝 4. 备注 (Notes)日志记录说明：所有的体检日志应汇总至 \\TRUENAS\Multi-Agent-Log。建议在每个测试步骤后追加输出到该路径，方便后续审计。
