@@ -1,9 +1,13 @@
-cat > deploy-n8n-final-run.sh << 'EOF'
+# 删除有问题的脚本
+rm -f deploy-n8n-final-run.sh
+
+# 创建修复后的脚本
+cat > deploy-n8n-final-run-fixed.sh << 'EOF'
 #!/bin/bash
 
 # ============================================
 # n8n 生产级部署脚本 (KubeEdge + Containerd)
-# 版本: 2.0.0
+# 版本: 2.0.1
 # 执行位置: 控制中心 (.10)
 # ============================================
 
@@ -16,7 +20,7 @@ NC='\033[0m'
 
 echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
 echo -e "${BLUE}║      n8n 生产级部署脚本 (KubeEdge + Containerd)           ║${NC}"
-echo -e "${BLUE}║                   版本: 2.0.0                              ║${NC}"
+echo -e "${BLUE}║                   版本: 2.0.1 (修复版)                     ║${NC}"
 echo -e "${BLUE}╚════════════════════════════════════════════════════════════╝${NC}"
 echo ""
 
@@ -36,7 +40,7 @@ if ! kubectl get nodes &> /dev/null; then
 fi
 echo -e "${GREEN}✓ kubectl 连接正常${NC}"
 
-# 获取边缘节点信息 (假设边缘节点名为 agent01)
+# 获取边缘节点信息
 EDGE_NODE="agent01"
 NODE_IP="192.168.1.20"
 echo -e "${GREEN}✓ 目标边缘节点: ${EDGE_NODE} (${NODE_IP})${NC}"
@@ -46,19 +50,19 @@ sleep 1
 echo -e "${YELLOW}[2/5] 在边缘节点 ${EDGE_NODE} 上准备数据目录...${NC}"
 STORAGE_PATH="/data/n8n"
 
-# 创建一个临时 Pod 来创建目录
-cat << EOF | kubectl apply -f - &> /dev/null
+# 创建一个临时 Pod 来创建目录 - 修复了 EOF 问题
+TMP_POD=$(cat << 'PODEOF'
 apiVersion: v1
 kind: Pod
 metadata:
   name: n8n-dir-prepare
   namespace: default
 spec:
-  nodeName: ${EDGE_NODE}
+  nodeName: agent01
   containers:
   - name: prepare
     image: busybox:latest
-    command: ["sh", "-c", "mkdir -p ${STORAGE_PATH} && chmod 777 ${STORAGE_PATH} && echo '目录已创建'"]
+    command: ["sh", "-c", "mkdir -p /data/n8n && chmod 777 /data/n8n"]
     volumeMounts:
     - name: host-root
       mountPath: /host
@@ -69,19 +73,24 @@ spec:
     hostPath:
       path: /
   restartPolicy: Never
-EOF
+PODEOF
+)
 
-# 等待 Pod 完成并删除
+echo "$TMP_POD" | kubectl apply -f - > /dev/null 2>&1
+
+# 等待 Pod 完成
 echo "   等待目录创建完成..."
 sleep 5
-kubectl delete pod n8n-dir-prepare --force --grace-period=0 &> /dev/null
+
+# 删除临时 Pod
+kubectl delete pod n8n-dir-prepare --force --grace-period=0 > /dev/null 2>&1
 echo -e "${GREEN}✓ 数据目录已准备: ${STORAGE_PATH}${NC}"
 sleep 1
 
 # --- 3. 生成部署 YAML ---
 echo -e "${YELLOW}[3/5] 生成 n8n 部署配置...${NC}"
-cat > n8n-production.yaml << 'EOF2'
----
+
+cat > n8n-production.yaml << 'YAMLEOF'
 apiVersion: v1
 kind: Service
 metadata:
@@ -176,7 +185,7 @@ spec:
         hostPath:
           path: /data/n8n
           type: DirectoryOrCreate
-EOF2
+YAMLEOF
 
 echo -e "${GREEN}✓ 配置文件生成: n8n-production.yaml${NC}"
 sleep 1
@@ -184,10 +193,12 @@ sleep 1
 # --- 4. 应用部署 ---
 echo -e "${YELLOW}[4/5] 部署 n8n 到 KubeEdge 集群...${NC}"
 
-kubectl delete deployment n8n --ignore-not-found &> /dev/null
-kubectl delete svc n8n-service --ignore-not-found &> /dev/null
+# 先删除可能存在的旧部署
+kubectl delete deployment n8n --ignore-not-found > /dev/null 2>&1
+kubectl delete svc n8n-service --ignore-not-found > /dev/null 2>&1
 sleep 2
 
+# 应用新配置
 kubectl apply -f n8n-production.yaml
 
 if [ $? -eq 0 ]; then
@@ -200,8 +211,9 @@ fi
 # --- 5. 等待并验证 ---
 echo -e "${YELLOW}[5/5] 等待 Pod 启动并验证...${NC}"
 echo "   等待 Pod 调度到边缘节点..."
-sleep 5
+sleep 10
 
+# 获取 Pod 状态
 POD_STATUS=$(kubectl get pods -l app=n8n -o jsonpath='{.items[0].status.phase}' 2>/dev/null)
 POD_NODE=$(kubectl get pods -l app=n8n -o jsonpath='{.items[0].spec.nodeName}' 2>/dev/null)
 
@@ -230,13 +242,6 @@ echo ""
 echo -e "${CYAN}🔧 管理命令 (在控制中心执行)${NC}"
 echo -e "  ${BLUE}•${NC} 查看 Pod:     ${YELLOW}kubectl get pods -l app=n8n -o wide${NC}"
 echo -e "  ${BLUE}•${NC} 查看日志:     ${YELLOW}kubectl logs -f -l app=n8n${NC}"
-echo -e "  ${BLUE}•${NC} 查看详情:     ${YELLOW}kubectl describe pod -l app=n8n${NC}"
-echo -e "  ${BLUE}•${NC} 重启部署:     ${YELLOW}kubectl rollout restart deployment n8n${NC}"
-echo ""
-echo -e "${YELLOW}📌 后续步骤：${NC}"
-echo -e "  1. 如果无法通过 NodePort 访问，请在边缘节点配置反向代理"
-echo -e "  2. 首次访问 n8n 需要创建管理员账号"
-echo -e "  3. 建议立即创建系统快照"
 echo ""
 
 # 可选：显示实时日志
@@ -249,6 +254,7 @@ fi
 exit 0
 EOF
 
-chmod +x deploy-n8n-final-run.sh
-echo -e "${GREEN}✅ 脚本已创建并赋予执行权限。${NC}"
-echo -e "${YELLOW}现在运行脚本：${NC} ./deploy-n8n-final-run.sh"
+chmod +x deploy-n8n-final-run-fixed.sh
+
+echo -e "${GREEN}✅ 修复版脚本已创建！${NC}"
+echo -e "${YELLOW}现在运行修复版脚本：${NC} ./deploy-n8n-final-run-fixed.sh"
