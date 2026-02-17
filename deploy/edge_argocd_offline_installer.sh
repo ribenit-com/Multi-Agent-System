@@ -1,124 +1,95 @@
 #!/bin/bash
 set -e
 
-# -----------------------------
-# 配置
-# -----------------------------
 NAS_DIR="/mnt/truenas"
 mkdir -p "$NAS_DIR"
 
-ARGOCD_NAMESPACE="argocd"
-STORAGECLASS_NAME="local-path"
+# 集群信息
+KUBECONFIG=${KUBECONFIG:-"$HOME/.kube/config"}
+NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="InternalIP")].address}')
 
-# 离线镜像列表
-IMAGES=(
-  "m.daocloud.io/quay.io/argoproj/argocd:v2.9.1"
-  "docker.m.daocloud.io/library/redis:7.0.14-alpine"
-  "ghcr.m.daocloud.io/dexidp/dex:v2.37.0"
-  "m.daocloud.io/docker.io/jimmidyson/configmap-reload:v0.8.0"
-  "m.daocloud.io/docker.io/library/alpine:latest"
-)
+echo "[INFO] 当前节点 IP: $NODE_IP"
+echo "[INFO] 当前 KUBECONFIG: $KUBECONFIG"
 
-# -----------------------------
-# 检查 kubectl
-# -----------------------------
-echo "🔹 当前节点 IP: $(hostname -I | awk '{print $1}')"
-echo "🔹 当前 KUBECONFIG: ${KUBECONFIG:-$HOME/.kube/config}"
-
-echo "🔹 检查 kubectl 可用性..."
-kubectl version --client
-kubectl get nodes
-
-# -----------------------------
-# 创建命名空间
-# -----------------------------
-echo "🔹 检查/创建命名空间 $ARGOCD_NAMESPACE..."
-kubectl get ns "$ARGOCD_NAMESPACE" >/dev/null 2>&1 || kubectl create ns "$ARGOCD_NAMESPACE"
-echo "ℹ️ namespace $ARGOCD_NAMESPACE 已存在或创建完成"
-
-# -----------------------------
-# 安装 Helm
-# -----------------------------
-if ! command -v helm &>/dev/null; then
-  echo "⚠️ Helm 未安装，正在安装..."
-  curl -sSL https://get.helm.sh/helm-v3.20.0-linux-amd64.tar.gz | tar xz -C /tmp
-  sudo mv /tmp/linux-amd64/helm /usr/local/bin/helm
+# 检查命名空间
+NS="argocd"
+if kubectl get ns "$NS" &>/dev/null; then
+    echo "[INFO] 命名空间 $NS 已存在"
+else
+    echo "[INFO] 创建命名空间 $NS"
+    kubectl create ns "$NS"
 fi
 
-echo "🔹 Helm 版本信息："
-helm version
+# 检查 StorageClass
+SC="local-path"
+if kubectl get sc "$SC" &>/dev/null; then
+    echo "[INFO] StorageClass $SC 已存在"
+else
+    echo "[INFO] StorageClass $SC 不存在，自动部署 local-path-provisioner"
+    kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/master/deploy/local-path-storage.yaml
+    echo "[INFO] 等待 local-path-provisioner Pod 就绪..."
+    kubectl -n local-path-storage wait --for=condition=Ready pod -l app=local-path-provisioner --timeout=120s
+fi
 
-echo "🔹 添加 Argo Helm 仓库..."
+# 拉取必要镜像
+IMAGES=(
+    "m.daocloud.io/quay.io/argoproj/argocd:v2.9.1"
+    "docker.m.daocloud.io/library/redis:7.0.14-alpine"
+    "ghcr.m.daocloud.io/dexidp/dex:v2.37.0"
+    "m.daocloud.io/docker.io/jimmidyson/configmap-reload:v0.8.0"
+    "m.daocloud.io/docker.io/library/alpine:latest"
+)
+for img in "${IMAGES[@]}"; do
+    echo "[INFO] 拉取镜像 $img"
+    sudo ctr -n k8s.io images pull "$img"
+done
+
+# 安装 Helm（如果没有）
+if ! command -v helm &>/dev/null; then
+    echo "[INFO] Helm 未安装，正在安装..."
+    curl -fsSL https://get.helm.sh/helm-v3.20.0-linux-amd64.tar.gz | tar -xz
+    sudo mv linux-amd64/helm /usr/local/bin/helm
+fi
+
+# 添加 Argo Helm 仓库
 helm repo add argo https://argoproj.github.io/argo-helm
 helm repo update
 
-# -----------------------------
-# 检查 StorageClass
-# -----------------------------
-echo "🔹 检查 StorageClass $STORAGECLASS_NAME..."
-if ! kubectl get sc "$STORAGECLASS_NAME" >/dev/null 2>&1; then
-  echo "⚠️ StorageClass $STORAGECLASS_NAME 不存在，正在创建 local-path-provisioner..."
-  kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/master/deploy/local-path-storage.yaml
-  echo "🔹 等待 local-path-provisioner Pod 就绪..."
-  kubectl -n local-path-storage wait --for=condition=Ready pod -l app=local-path-provisioner --timeout=120s
-  echo "✅ StorageClass $STORAGECLASS_NAME 已创建并可用"
-else
-  echo "✅ StorageClass $STORAGECLASS_NAME 已存在"
-fi
+# 随机选择 10000~11000 的 NodePort
+NODEPORT=$((10000 + RANDOM % 1000))
+echo "[INFO] 选择 NodePort: $NODEPORT"
 
-# -----------------------------
-# 拉取镜像
-# -----------------------------
-echo "🔹 检查/拉取 ArgoCD 相关镜像..."
-for img in "${IMAGES[@]}"; do
-  echo "📥 拉取镜像: $img"
-  if sudo ctr -n k8s.io images pull "$img"; then
-    echo "✅ 成功: $img"
-  else
-    echo "❌ 镜像拉取失败: $img，请检查网络"
-    exit 1
-  fi
-done
-echo "✅ 所有镜像拉取完成"
+# 部署 ArgoCD（NodePort）
+echo "[INFO] 安装 ArgoCD Helm Chart (NodePort)..."
+helm upgrade --install argocd argo/argo-cd \
+    -n argocd \
+    --set server.service.type=NodePort \
+    --set server.service.nodePort="$NODEPORT" \
+    --wait
 
-# -----------------------------
-# 安装 ArgoCD Helm Chart
-# -----------------------------
-echo "🔹 安装 ArgoCD Helm Chart..."
-if helm -n "$ARGOCD_NAMESPACE" status argocd >/dev/null 2>&1; then
-  helm -n "$ARGOCD_NAMESPACE" upgrade argocd argo/argo-cd
-else
-  helm -n "$ARGOCD_NAMESPACE" install argocd argo/argo-cd
-fi
+# 获取初始密码
+ADMIN_SECRET=$(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d)
 
-# -----------------------------
-# 修改 ArgoCD Server 为 NodePort
-# -----------------------------
-echo "🔹 设置 ArgoCD Server 服务类型为 NodePort..."
-kubectl -n "$ARGOCD_NAMESPACE" patch svc argocd-server -p '{"spec": {"type": "NodePort"}}'
-NODEPORT=$(kubectl -n "$ARGOCD_NAMESPACE" get svc argocd-server -o jsonpath='{.spec.ports[?(@.port==80)].nodePort}')
-
-# -----------------------------
-# 生成 HTML 登录页
-# -----------------------------
-ARGOCD_PASSWORD=$(kubectl -n "$ARGOCD_NAMESPACE" get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d)
-cat <<EOF > "$NAS_DIR/argocd_login.html"
+# 生成 HTML 文件
+HTML_FILE="$NAS_DIR/argocd_login.html"
+cat <<EOF > "$HTML_FILE"
 <!DOCTYPE html>
-<html>
+<html lang="zh">
 <head>
-    <meta charset="UTF-8">
-    <title>ArgoCD 登录信息</title>
+<meta charset="UTF-8">
+<title>ArgoCD 登录信息</title>
 </head>
 <body>
-    <h1>ArgoCD 登录信息</h1>
-    <p>URL: <a href="http://$(hostname -I | awk '{print $1}'):$NODEPORT" target="_blank">http://$(hostname -I | awk '{print $1}'):$NODEPORT</a></p>
-    <p>账号: admin</p>
-    <p>密码: $ARGOCD_PASSWORD</p>
+<h2>ArgoCD 登录信息</h2>
+<ul>
+<li>URL: <a href="http://$NODE_IP:$NODEPORT" target="_blank">http://$NODE_IP:$NODEPORT</a></li>
+<li>账号: <b>admin</b></li>
+<li>密码: <b>$ADMIN_SECRET</b></li>
+</ul>
+<p>请妥善保存初始密码，首次登录后可修改。</p>
 </body>
 </html>
 EOF
-echo "✅ ArgoCD 登录页已生成: $NAS_DIR/argocd_login.html"
 
-echo "🎉 ArgoCD 安装完成，访问地址：http://$(hostname -I | awk '{print $1}'):$NODEPORT"
-echo "    账号：admin"
-echo "    密码：$ARGOCD_PASSWORD"
+echo "[INFO] HTML 登录页面已生成: $HTML_FILE"
+echo "[SUCCESS] ArgoCD 安装完成，可通过 NodePort 访问"
