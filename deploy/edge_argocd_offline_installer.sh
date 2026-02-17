@@ -2,48 +2,42 @@
 set -e
 
 NAS_DIR="/mnt/truenas"
+LOG_FILE="$NAS_DIR/Enterprise_ArgoCD_Installer_$(date +%Y%m%d_%H%M%S).log"
 mkdir -p "$NAS_DIR"
+exec > >(tee -a "$LOG_FILE") 2>&1
 
-echo "[INFO] 🔹 当前节点 IP: $(hostname -I | awk '{print $1}')"
-echo "[INFO] 🔹 当前 KUBECONFIG: ${KUBECONFIG:-$HOME/.kube/config}"
+echo "[INFO] 🔹 安装日志输出到 $LOG_FILE"
 
-# 检查 kubectl
-if ! command -v kubectl >/dev/null 2>&1; then
-    echo "[ERROR] kubectl 未安装，请先安装 kubectl"
-    exit 1
-fi
+# ArgoCD NodePort
+ARGOCD_NODEPORT=30100
 
-# 检查 Helm
+echo "[INFO] 🔹 检查 kubectl 可用性..."
+kubectl version --client
+kubectl cluster-info
+
+echo "[INFO] 🔹 检查/创建命名空间 argocd..."
+kubectl get ns argocd >/dev/null 2>&1 || kubectl create ns argocd
+
+echo "[INFO] 🔹 安装 Helm..."
 if ! command -v helm >/dev/null 2>&1; then
-    echo "[INFO] Helm 未安装，正在安装 Helm..."
-    curl -sSL https://get.helm.sh/helm-v3.20.0-linux-amd64.tar.gz -o /tmp/helm.tar.gz
-    tar -zxvf /tmp/helm.tar.gz -C /tmp
+    curl -sSL https://get.helm.sh/helm-v3.20.0-linux-amd64.tar.gz | tar -xz -C /tmp
     sudo mv /tmp/linux-amd64/helm /usr/local/bin/helm
-    rm -rf /tmp/helm.tar.gz /tmp/linux-amd64
-    echo "[INFO] Helm 安装完成: $(helm version --short)"
-else
-    echo "[INFO] Helm 已安装: $(helm version --short)"
 fi
+helm version
 
-# 创建命名空间 argocd
-if ! kubectl get ns argocd >/dev/null 2>&1; then
-    echo "[INFO] 创建命名空间 argocd..."
-    kubectl create ns argocd
-else
-    echo "[INFO] namespace argocd 已存在"
-fi
+echo "[INFO] 🔹 添加 ArgoCD Helm 仓库..."
+helm repo add argo https://argoproj.github.io/argo-helm
+helm repo update
 
-# 检查 local-path StorageClass
+echo "[INFO] 🔹 检查 StorageClass local-path..."
 if ! kubectl get sc local-path >/dev/null 2>&1; then
     echo "[INFO] StorageClass local-path 不存在，部署 local-path-provisioner..."
     kubectl apply -f https://raw.githubusercontent.com/rancher/local-path-provisioner/master/deploy/local-path-storage.yaml
-    # 等待 Pod 就绪
-    kubectl -n local-path-storage wait --for=condition=Ready pod -l app=local-path-provisioner --timeout=120s
-else
-    echo "[INFO] StorageClass local-path 已存在"
+    echo "[INFO] 🔹 等待 local-path-provisioner Pod 就绪..."
+    kubectl wait --for=condition=Ready pod -l app=local-path-provisioner -n local-path-storage --timeout=120s
 fi
 
-# 定义 ArgoCD 及依赖镜像
+# 预拉 ArgoCD 相关镜像
 IMAGES=(
     "m.daocloud.io/quay.io/argoproj/argocd:v2.9.1"
     "docker.m.daocloud.io/library/redis:7.0.14-alpine"
@@ -52,52 +46,47 @@ IMAGES=(
     "m.daocloud.io/docker.io/library/alpine:latest"
 )
 
-echo "[INFO] 🔹 拉取镜像..."
+echo "[INFO] 🔹 拉取 ArgoCD 相关镜像..."
 for img in "${IMAGES[@]}"; do
-    echo "  🔹 $img"
     sudo ctr -n k8s.io images pull "$img"
 done
 echo "[INFO] ✅ 所有镜像拉取完成"
 
-# 添加 Argo Helm 仓库
-helm repo add argo https://argoproj.github.io/argo-helm
-helm repo update
-
-# 安装 ArgoCD（NodePort 30100）
+# 安装/升级 ArgoCD
+echo "[INFO] 🔹 安装 ArgoCD Helm Chart..."
 helm upgrade --install argocd argo/argo-cd \
-    --namespace argocd \
+    -n argocd \
     --set server.service.type=NodePort \
-    --set server.service.nodePort=30100 \
+    --set server.service.nodePort=$ARGOCD_NODEPORT \
     --wait
 
-# 获取 ArgoCD 初始密码
-ARGO_PASSWORD=$(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d)
-ARGO_USER="admin"
-ARGO_IP=$(hostname -I | awk '{print $1}')
-ARGO_PORT=30100
+# 开放防火墙端口
+echo "[INFO] 🔹 开放防火墙端口 $ARGOCD_NODEPORT"
+if command -v ufw >/dev/null 2>&1; then
+    sudo ufw allow $ARGOCD_NODEPORT/tcp
+    sudo ufw reload
+fi
+if command -v firewall-cmd >/dev/null 2>&1; then
+    sudo firewall-cmd --permanent --add-port=${ARGOCD_NODEPORT}/tcp
+    sudo firewall-cmd --reload
+fi
 
-# 输出 HTML 文件到 NAS
-HTML_FILE="$NAS_DIR/argocd_info.html"
-cat <<EOF > "$HTML_FILE"
-<!DOCTYPE html>
+# 输出访问信息到 NAS
+ARGOCD_SECRET=$(kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath="{.data.password}" | base64 -d)
+HTML_FILE="$NAS_DIR/argocd_access.html"
+cat > "$HTML_FILE" <<EOF
 <html>
-<head>
-<title>ArgoCD 登录信息</title>
-<meta charset="utf-8">
-</head>
+<head><title>ArgoCD Access</title></head>
 <body>
 <h2>ArgoCD 登录信息</h2>
-<p><b>URL:</b> http://$ARGO_IP:$ARGO_PORT</p>
-<p><b>账号:</b> $ARGO_USER</p>
-<p><b>初始密码:</b> $ARGO_PASSWORD</p>
-<p>⚠️ 请首次登录后修改密码</p>
+<p>URL: <a href="http://$(hostname -I | awk '{print $1}'):$ARGOCD_NODEPORT">http://$(hostname -I | awk '{print $1}'):$ARGOCD_NODEPORT</a></p>
+<p>账号: admin</p>
+<p>初始密码: $ARGOCD_SECRET</p>
 </body>
 </html>
 EOF
 
-chmod 644 "$HTML_FILE"
-
-echo "[INFO] 🔹 ArgoCD 安装完成，登录信息已输出到 $HTML_FILE"
-echo "     URL: http://$ARGO_IP:$ARGO_PORT"
-echo "     账号: $ARGO_USER"
-echo "     初始密码: $ARGO_PASSWORD"
+echo "[INFO] 🔹 ArgoCD 安装完成，登录信息已生成: $HTML_FILE"
+echo "URL: http://$(hostname -I | awk '{print $1}'):$ARGOCD_NODEPORT"
+echo "账号: admin"
+echo "初始密码: $ARGOCD_SECRET"
