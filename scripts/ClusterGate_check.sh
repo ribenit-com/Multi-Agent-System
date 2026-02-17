@@ -1,97 +1,95 @@
 #!/bin/bash
 # ====================================================================
-# 🔹 ClusterGate 健康检测脚本 - 企业级端口监控
-# 输出: 终端实时打印 + HTML 报告 + 日志
+# 🤖 ClusterGate - 企业级集群端口健康检测
+# 强制输出到 NAS
 # ====================================================================
 
 set -euo pipefail
 
+# ---------------- 配置 ----------------
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-LOG_FILE="/tmp/ClusterGate_check_${TIMESTAMP}.log"
-REPORT_FILE="/tmp/ClusterGate_check_${TIMESTAMP}.html"
+CONTROL_IP=$(hostname -I | awk '{print $1}')
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; NC='\033[0m'
+# NAS 挂载路径
+NAS_LOG_DIR="/mnt/truenas"
 
-# ---------------- nc工具检测 ----------------
-if ! command -v nc &>/dev/null; then
-    echo -e "${YELLOW}⚠ nc (netcat) 未安装，正在尝试安装...${NC}"
-    if command -v apt &>/dev/null; then
-        sudo apt update && sudo apt install -y netcat
-    elif command -v yum &>/dev/null; then
-        sudo yum install -y nc
-    else
-        echo -e "${RED}❌ 无法自动安装 nc，请手动安装${NC}"
-        exit 1
-    fi
+if [ ! -d "$NAS_LOG_DIR" ]; then
+    echo "❌ NAS路径 $NAS_LOG_DIR 不存在，请先挂载 NAS"
+    exit 1
+fi
+if [ ! -w "$NAS_LOG_DIR" ]; then
+    echo "❌ NAS路径 $NAS_LOG_DIR 不可写，请检查权限"
+    exit 1
 fi
 
+REPORT_FILE="${NAS_LOG_DIR}/ClusterGate_check_${TIMESTAMP}.html"
+LOG_FILE="${NAS_LOG_DIR}/ClusterGate_check_${TIMESTAMP}.log"
+
+RED='\033[0;31m'; GREEN='\033[0;32m'; NC='\033[0m'
+
+log() {
+    echo -e "$1" | tee -a "$LOG_FILE"
+}
+
 # ---------------- 节点信息 ----------------
-NODES=(
-    "cmaster01:192.168.1.10"
-    "agent01:192.168.1.20"
-)
-
-echo "🔹 获取节点信息..." | tee -a "$LOG_FILE"
-
-NODE_TABLE=""
-for node in "${NODES[@]}"; do
-    NAME="${node%%:*}"
-    IP="${node##*:}"
-    READY="True"  # 假设节点 Ready，如果需要可以改成 kubectl get nodes
-    line="节点: $NAME | IP: $IP | Ready状态: $READY"
-    echo "$line" | tee -a "$LOG_FILE"
-    NODE_TABLE+="<tr><td>$NAME</td><td>$IP</td><td>$READY</td></tr>"
-done
+log "🔹 获取节点信息..."
+NODES=$(kubectl get nodes -o wide --no-headers 2>/dev/null || echo "")
+if [ -z "$NODES" ]; then
+    log "${RED}❌ 无法获取节点信息${NC}"
+else
+    while read -r line; do
+        NAME=$(echo $line | awk '{print $1}')
+        STATUS=$(echo $line | awk '{print $2}')
+        IP=$(echo $line | awk '{print $6}')
+        log "节点: $NAME | IP: $IP | Ready状态: $STATUS"
+    done <<< "$NODES"
+fi
 
 # ---------------- 本机端口检测 ----------------
 PORTS=(6443 10000 10002 8080 443)
-echo -e "\n🔹 检查本机端口..." | tee -a "$LOG_FILE"
-
-PORT_TABLE=""
+log "🔹 检查本机端口..."
+PORT_HTML=""
 for PORT in "${PORTS[@]}"; do
-    if nc -z -w 2 127.0.0.1 $PORT &>/dev/null; then
-        STATUS="✅ 可达"
+    if command -v nc >/dev/null 2>&1; then
+        if nc -z -w 2 localhost $PORT &>/dev/null; then
+            STATUS="✅ 可达"
+        else
+            STATUS="❌ 不可达"
+        fi
     else
-        STATUS="❌ 不可达"
+        log "⚠️ nc 命令不存在，请先安装 netcat"
+        STATUS="⚠️ 未安装 nc"
     fi
-    echo "端口 $PORT: $STATUS" | tee -a "$LOG_FILE"
-    PORT_TABLE+="<tr><td>$PORT</td><td>$STATUS</td></tr>"
+    log "端口 $PORT: $STATUS"
+    PORT_HTML+="<tr><td>端口 $PORT</td><td>$STATUS</td></tr>"
 done
 
-# ---------------- HTML报告生成 ----------------
+# ---------------- HTML 报告 ----------------
 cat > "$REPORT_FILE" <<EOF
 <!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
-<title>ClusterGate 健康检测报告</title>
+<title>ClusterGate - 本机端口健康检测</title>
 <style>
-body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 20px; }
+body { font-family: sans-serif; margin: 30px; background: #f0f2f5; }
 h1 { color: #1a73e8; }
-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
-th, td { padding: 8px; border: 1px solid #ddd; text-align: left; }
-th { background: #f2f2f2; }
+table { border-collapse: collapse; width: 50%; }
+th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+th { background: #f8f9fa; }
 </style>
 </head>
 <body>
-<h1>ClusterGate 健康检测报告</h1>
-<p>生成时间: $(date '+%Y-%m-%d %H:%M:%S')</p>
-
-<h2>节点状态</h2>
-<table>
-<tr><th>节点名</th><th>IP</th><th>Ready</th></tr>
-$NODE_TABLE
-</table>
-
-<h2>本机端口检测</h2>
+<h1>ClusterGate - 本机端口健康检测</h1>
+<p>生成时间: $(date '+%Y-%m-%d %H:%M:%S') | 控制中心IP: $CONTROL_IP</p>
 <table>
 <tr><th>端口</th><th>状态</th></tr>
-$PORT_TABLE
+$PORT_HTML
 </table>
 </body>
 </html>
 EOF
 
-echo -e "\n✅ 健康检测完成"
-echo "HTML报告: $REPORT_FILE"
-echo "日志文件: $LOG_FILE"
+log "${GREEN}✅ 健康检测完成${NC}"
+log "HTML报告: $REPORT_FILE"
+log "日志文件: $LOG_FILE"
