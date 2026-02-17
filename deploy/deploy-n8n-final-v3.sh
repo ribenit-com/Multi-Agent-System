@@ -1,4 +1,4 @@
-cat > deploy-n8n-final-v2.sh << 'EOF'
+cat > deploy-n8n-final-v3.sh << 'EOF'
 #!/bin/bash
 
 # 颜色定义
@@ -80,10 +80,10 @@ NODEPORT=31678
 echo -e "${GREEN}✓ 使用端口: ${NODEPORT}${NC}"
 echo ""
 
-# 步骤6: 部署n8n（修复了语法问题）
-echo -e "${YELLOW}[6/6] 部署n8n...${NC}"
+# 步骤6: 部署n8n（添加污点容忍）
+echo -e "${YELLOW}[6/6] 部署n8n（添加边缘节点污点容忍）...${NC}"
 
-# 先创建Deployment YAML文件（避免here-document嵌套问题）
+# 先创建Deployment YAML文件
 cat > /tmp/n8n-deploy.yaml << EOF2
 apiVersion: apps/v1
 kind: Deployment
@@ -104,6 +104,14 @@ spec:
     spec:
       nodeSelector:
         kubernetes.io/hostname: ${EDGE_NODE}
+      # 添加边缘节点污点容忍
+      tolerations:
+      - key: "node-role.kubernetes.io/edge"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "node.kubernetes.io/not-ready"
+        operator: "Exists"
+        effect: "NoExecute"
       containers:
       - name: n8n
         image: n8nio/n8n:latest
@@ -143,7 +151,14 @@ spec:
     app: n8n
 EOF2
 
+# 先删除可能存在的旧部署
+echo -e "${YELLOW}删除可能存在的旧部署...${NC}"
+kubectl delete deployment n8n --ignore-not-found
+kubectl delete svc n8n-service --ignore-not-found
+sleep 3
+
 # 应用YAML文件
+echo -e "${YELLOW}应用新部署配置...${NC}"
 kubectl apply -f /tmp/n8n-deploy.yaml
 
 # 清理临时文件
@@ -172,11 +187,12 @@ echo ""
 echo -e "${YELLOW}查看部署状态:${NC}"
 echo "  kubectl get pods -l app=n8n -w"
 echo "  kubectl logs -l app=n8n"
+echo "  kubectl describe pod -l app=n8n | grep -A 5 Events"
 echo ""
 EOF
 
 # 添加执行权限
-chmod +x deploy-n8n-final-v2.sh
+chmod +x deploy-n8n-final-v3.sh
 
-echo -e "${GREEN}完全修复的脚本已创建！${NC}"
-echo -e "现在运行：${YELLOW}./deploy-n8n-final-v2.sh${NC}"
+echo -e "${GREEN}完全修复的脚本（含污点容忍）已创建！${NC}"
+echo -e "现在在控制中心（.10）运行：${YELLOW}./deploy-n8n-final-v3.sh${NC}"
