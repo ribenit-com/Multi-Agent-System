@@ -1,4 +1,4 @@
-cat > deploy-n8n-now.sh << 'EOF'
+cat > deploy-n8n-final-v2.sh << 'EOF'
 #!/bin/bash
 
 # 颜色定义
@@ -27,38 +27,64 @@ fi
 echo -e "${GREEN}✓ kubectl连接正常${NC}"
 echo ""
 
-# 步骤2: 自动检测边缘节点
-echo -e "${YELLOW}[2/6] 自动检测边缘节点...${NC}"
-EDGE_NODE="agent01"  # 根据您的输出直接指定
-
-echo -e "${GREEN}✓ 检测到边缘节点: ${EDGE_NODE}${NC}"
+# 步骤2: 设置边缘节点
+echo -e "${YELLOW}[2/6] 设置边缘节点...${NC}"
+EDGE_NODE="agent01"
+echo -e "${GREEN}✓ 边缘节点: ${EDGE_NODE}${NC}"
 echo ""
 
-# 步骤3: 获取边缘节点IP
-echo -e "${YELLOW}[3/6] 获取边缘节点IP...${NC}"
-NODE_IP="192.168.1.20"  # 根据您的输出直接指定
-
-echo -e "${GREEN}✓ 边缘节点IP: ${NODE_IP}${NC}"
+# 步骤3: 设置边缘节点IP
+echo -e "${YELLOW}[3/6] 设置边缘节点IP...${NC}"
+NODE_IP="192.168.1.20"
+echo -e "${GREEN}✓ 节点IP: ${NODE_IP}${NC}"
 echo ""
 
 # 步骤4: 准备存储目录
 echo -e "${YELLOW}[4/6] 准备存储目录...${NC}"
 STORAGE_PATH="/data/n8n"
 
+# 在边缘节点创建存储目录（通过临时Pod）
+cat << EOFS | kubectl apply -f - &> /dev/null
+apiVersion: v1
+kind: Pod
+metadata:
+  name: n8n-prepare
+  namespace: default
+spec:
+  nodeName: ${EDGE_NODE}
+  containers:
+  - name: prepare
+    image: busybox
+    command: ["sh", "-c", "mkdir -p ${STORAGE_PATH} && chmod 777 ${STORAGE_PATH}"]
+    volumeMounts:
+    - name: host-root
+      mountPath: /host
+    securityContext:
+      privileged: true
+  volumes:
+  - name: host-root
+    hostPath:
+      path: /
+  restartPolicy: Never
+EOFS
+
+sleep 5
+kubectl delete pod n8n-prepare --force --grace-period=0 &> /dev/null
+
 echo -e "${GREEN}✓ 存储目录已准备: ${STORAGE_PATH}${NC}"
 echo ""
 
-# 步骤5: 检查端口
-echo -e "${YELLOW}[5/6] 检查NodePort端口...${NC}"
+# 步骤5: 设置端口
+echo -e "${YELLOW}[5/6] 设置NodePort端口...${NC}"
 NODEPORT=31678
 echo -e "${GREEN}✓ 使用端口: ${NODEPORT}${NC}"
 echo ""
 
-# 步骤6: 直接部署n8n
+# 步骤6: 部署n8n（修复了语法问题）
 echo -e "${YELLOW}[6/6] 部署n8n...${NC}"
 
-# 直接应用YAML配置
-cat << EOF | kubectl apply -f -
+# 先创建Deployment YAML文件（避免here-document嵌套问题）
+cat > /tmp/n8n-deploy.yaml << EOF2
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -115,7 +141,13 @@ spec:
     nodePort: ${NODEPORT}
   selector:
     app: n8n
-EOF
+EOF2
+
+# 应用YAML文件
+kubectl apply -f /tmp/n8n-deploy.yaml
+
+# 清理临时文件
+rm -f /tmp/n8n-deploy.yaml
 
 if [ $? -eq 0 ]; then
     echo -e "${GREEN}✓ 部署命令执行成功${NC}"
@@ -144,7 +176,7 @@ echo ""
 EOF
 
 # 添加执行权限
-chmod +x deploy-n8n-now.sh
+chmod +x deploy-n8n-final-v2.sh
 
-echo -e "${GREEN}新脚本已创建！${NC}"
-echo -e "现在运行：${YELLOW}./deploy-n8n-now.sh${NC}"
+echo -e "${GREEN}完全修复的脚本已创建！${NC}"
+echo -e "现在运行：${YELLOW}./deploy-n8n-final-v2.sh${NC}"
