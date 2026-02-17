@@ -1,14 +1,12 @@
-# 删除有问题的脚本
-rm -f deploy-n8n-final-run.sh
-
-# 创建修复后的脚本
-cat > deploy-n8n-final-run-fixed.sh << 'EOF'
+# 创建全新的部署脚本
+cat > deploy-n8n-new.sh << 'EOF'
 #!/bin/bash
 
 # ============================================
-# n8n 生产级部署脚本 (KubeEdge + Containerd)
-# 版本: 2.0.1
+# n8n 全新一键部署脚本 (KubeEdge + Containerd)
+# 版本: 3.0.0
 # 执行位置: 控制中心 (.10)
+# 说明: 这是一个完全独立的脚本，不依赖任何其他文件
 # ============================================
 
 # 颜色定义
@@ -16,53 +14,80 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+PURPLE='\033[0;35m'
+CYAN='\033[0;36m'
 NC='\033[0m'
 
+# 设置边缘节点信息（请根据实际情况修改）
+EDGE_NODE="agent01"
+NODE_IP="192.168.1.20"
+NODEPORT=31678
+
+# 打印标题
+clear
 echo -e "${BLUE}╔════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║      n8n 生产级部署脚本 (KubeEdge + Containerd)           ║${NC}"
-echo -e "${BLUE}║                   版本: 2.0.1 (修复版)                     ║${NC}"
+echo -e "${BLUE}║           n8n 全新一键部署脚本                            ║${NC}"
+echo -e "${BLUE}║               版本: 3.0.0 - 独立版                         ║${NC}"
 echo -e "${BLUE}╚════════════════════════════════════════════════════════════╝${NC}"
 echo ""
 
-# --- 1. 环境检查 ---
-echo -e "${YELLOW}[1/5] 检查部署环境...${NC}"
+# --- 步骤1: 环境检查 ---
+echo -e "${YELLOW}[1/4] 检查部署环境...${NC}"
 
 # 检查 kubectl
 if ! command -v kubectl &> /dev/null; then
     echo -e "${RED}✗ kubectl 未安装，请在控制中心安装 kubectl${NC}"
     exit 1
 fi
+echo -e "${GREEN}✓ kubectl 已安装${NC}"
 
 # 检查集群连接
 if ! kubectl get nodes &> /dev/null; then
     echo -e "${RED}✗ 无法连接到 Kubernetes 集群${NC}"
+    echo "请检查:"
+    echo "  - kubeconfig 配置是否正确"
+    echo "  - 集群是否正常运行"
     exit 1
 fi
-echo -e "${GREEN}✓ kubectl 连接正常${NC}"
+echo -e "${GREEN}✓ 集群连接正常${NC}"
 
-# 获取边缘节点信息
-EDGE_NODE="agent01"
-NODE_IP="192.168.1.20"
-echo -e "${GREEN}✓ 目标边缘节点: ${EDGE_NODE} (${NODE_IP})${NC}"
-sleep 1
+# 检查边缘节点是否存在
+if ! kubectl get node ${EDGE_NODE} &> /dev/null; then
+    echo -e "${YELLOW}⚠ 边缘节点 ${EDGE_NODE} 不存在，查看可用节点:${NC}"
+    kubectl get nodes
+    echo ""
+    read -p "请输入正确的边缘节点名称: " EDGE_NODE
+fi
+echo -e "${GREEN}✓ 目标边缘节点: ${EDGE_NODE}${NC}"
+echo ""
 
-# --- 2. 在边缘节点创建数据目录 (通过临时 Pod) ---
-echo -e "${YELLOW}[2/5] 在边缘节点 ${EDGE_NODE} 上准备数据目录...${NC}"
+# --- 步骤2: 直接在边缘节点创建数据目录（通过SSH） ---
+echo -e "${YELLOW}[2/4] 在边缘节点 ${EDGE_NODE} 上创建数据目录...${NC}"
+
 STORAGE_PATH="/data/n8n"
 
-# 创建一个临时 Pod 来创建目录 - 修复了 EOF 问题
-TMP_POD=$(cat << 'PODEOF'
+# 直接在边缘节点上创建目录（假设SSH免密登录已配置）
+echo "尝试通过SSH在边缘节点创建目录..."
+ssh -o ConnectTimeout=5 ${EDGE_NODE} "sudo mkdir -p ${STORAGE_PATH} && sudo chmod 777 ${STORAGE_PATH}" 2>/dev/null
+
+if [ $? -eq 0 ]; then
+    echo -e "${GREEN}✓ SSH连接成功，数据目录已创建${NC}"
+else
+    echo -e "${YELLOW}⚠ SSH连接失败，尝试使用临时Pod创建目录...${NC}"
+    
+    # 如果SSH失败，使用临时Pod创建目录
+    cat << EOF | kubectl apply -f - > /dev/null
 apiVersion: v1
 kind: Pod
 metadata:
   name: n8n-dir-prepare
   namespace: default
 spec:
-  nodeName: agent01
+  nodeName: ${EDGE_NODE}
   containers:
   - name: prepare
     image: busybox:latest
-    command: ["sh", "-c", "mkdir -p /data/n8n && chmod 777 /data/n8n"]
+    command: ["sh", "-c", "mkdir -p ${STORAGE_PATH} && chmod 777 ${STORAGE_PATH}"]
     volumeMounts:
     - name: host-root
       mountPath: /host
@@ -73,24 +98,26 @@ spec:
     hostPath:
       path: /
   restartPolicy: Never
-PODEOF
-)
+EOF
+    
+    echo "等待目录创建完成..."
+    sleep 5
+    kubectl delete pod n8n-dir-prepare --force --grace-period=0 > /dev/null 2>&1
+    echo -e "${GREEN}✓ 数据目录已创建${NC}"
+fi
+echo ""
 
-echo "$TMP_POD" | kubectl apply -f - > /dev/null 2>&1
+# --- 步骤3: 部署n8n ---
+echo -e "${YELLOW}[3/4] 部署 n8n 到 KubeEdge 集群...${NC}"
 
-# 等待 Pod 完成
-echo "   等待目录创建完成..."
-sleep 5
+# 先删除可能存在的旧部署
+kubectl delete deployment n8n --ignore-not-found > /dev/null 2>&1
+kubectl delete svc n8n-service --ignore-not-found > /dev/null 2>&1
+sleep 2
 
-# 删除临时 Pod
-kubectl delete pod n8n-dir-prepare --force --grace-period=0 > /dev/null 2>&1
-echo -e "${GREEN}✓ 数据目录已准备: ${STORAGE_PATH}${NC}"
-sleep 1
-
-# --- 3. 生成部署 YAML ---
-echo -e "${YELLOW}[3/5] 生成 n8n 部署配置...${NC}"
-
-cat > n8n-production.yaml << 'YAMLEOF'
+# 直接应用YAML配置（不生成中间文件）
+cat << EOF | kubectl apply -f -
+---
 apiVersion: v1
 kind: Service
 metadata:
@@ -103,7 +130,7 @@ spec:
   ports:
   - port: 5678
     targetPort: 5678
-    nodePort: 31678
+    nodePort: ${NODEPORT}
     protocol: TCP
     name: http
   selector:
@@ -127,7 +154,7 @@ spec:
         app: n8n
     spec:
       nodeSelector:
-        kubernetes.io/hostname: agent01
+        kubernetes.io/hostname: ${EDGE_NODE}
       tolerations:
       - key: "node-role.kubernetes.io/edge"
         operator: "Exists"
@@ -138,7 +165,7 @@ spec:
       containers:
       - name: n8n
         image: n8nio/n8n:latest
-        imagePullPolicy: IfNotPresent
+        imagePullPolicy: Always
         ports:
         - containerPort: 5678
           name: web
@@ -150,9 +177,9 @@ spec:
         - name: NODE_ENV
           value: "production"
         - name: N8N_HOST
-          value: "192.168.1.20"
+          value: "${NODE_IP}"
         - name: WEBHOOK_URL
-          value: "http://192.168.1.20:31678"
+          value: "http://${NODE_IP}:${NODEPORT}"
         - name: GENERIC_TIMEZONE
           value: "Asia/Shanghai"
         volumeMounts:
@@ -175,86 +202,98 @@ spec:
           timeoutSeconds: 3
         resources:
           requests:
-            memory: "512Mi"
-            cpu: "250m"
+            memory: "256Mi"
+            cpu: "100m"
           limits:
-            memory: "2Gi"
-            cpu: "1000m"
+            memory: "1Gi"
+            cpu: "500m"
       volumes:
       - name: n8n-data
         hostPath:
-          path: /data/n8n
+          path: ${STORAGE_PATH}
           type: DirectoryOrCreate
-YAMLEOF
-
-echo -e "${GREEN}✓ 配置文件生成: n8n-production.yaml${NC}"
-sleep 1
-
-# --- 4. 应用部署 ---
-echo -e "${YELLOW}[4/5] 部署 n8n 到 KubeEdge 集群...${NC}"
-
-# 先删除可能存在的旧部署
-kubectl delete deployment n8n --ignore-not-found > /dev/null 2>&1
-kubectl delete svc n8n-service --ignore-not-found > /dev/null 2>&1
-sleep 2
-
-# 应用新配置
-kubectl apply -f n8n-production.yaml
+EOF
 
 if [ $? -eq 0 ]; then
-    echo -e "${GREEN}✓ 部署命令已执行${NC}"
+    echo -e "${GREEN}✓ 部署命令执行成功${NC}"
 else
     echo -e "${RED}✗ 部署失败${NC}"
     exit 1
 fi
+echo ""
 
-# --- 5. 等待并验证 ---
-echo -e "${YELLOW}[5/5] 等待 Pod 启动并验证...${NC}"
-echo "   等待 Pod 调度到边缘节点..."
-sleep 10
+# --- 步骤4: 等待并验证 ---
+echo -e "${YELLOW}[4/4] 等待 Pod 启动并验证...${NC}"
 
-# 获取 Pod 状态
+# 等待 Pod 调度
+echo "等待 Pod 调度到边缘节点 (最多60秒)..."
+for i in {1..12}; do
+    POD_STATUS=$(kubectl get pods -l app=n8n -o jsonpath='{.items[0].status.phase}' 2>/dev/null)
+    if [ "$POD_STATUS" == "Running" ]; then
+        break
+    fi
+    echo -n "."
+    sleep 5
+done
+echo ""
+
+# 获取最终状态
+POD_NAME=$(kubectl get pods -l app=n8n -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
 POD_STATUS=$(kubectl get pods -l app=n8n -o jsonpath='{.items[0].status.phase}' 2>/dev/null)
 POD_NODE=$(kubectl get pods -l app=n8n -o jsonpath='{.items[0].spec.nodeName}' 2>/dev/null)
 
 if [ "$POD_STATUS" == "Running" ]; then
-    echo -e "${GREEN}✓ Pod 正在运行${NC}"
-    echo -e "${GREEN}✓ Pod 所在节点: ${POD_NODE}${NC}"
+    echo -e "${GREEN}✓ Pod 运行成功${NC}"
+    echo -e "  ${BLUE}•${NC} Pod名称: ${POD_NAME}"
+    echo -e "  ${BLUE}•${NC} 状态: ${GREEN}Running${NC}"
+    echo -e "  ${BLUE}•${NC} 所在节点: ${POD_NODE}"
 else
-    echo -e "${YELLOW}⚠ Pod 状态: ${POD_STATUS:-Pending}，请稍后手动检查${NC}"
+    echo -e "${YELLOW}⚠ Pod 状态: ${POD_STATUS:-Pending}${NC}"
+    echo "查看详细状态: kubectl describe pod -l app=n8n"
 fi
 
-# --- 完成 ---
+# 显示服务信息
+SVC_INFO=$(kubectl get svc n8n-service -o wide 2>/dev/null)
+if [ $? -eq 0 ]; then
+    echo -e "${GREEN}✓ Service 已创建${NC}"
+fi
+
+# 完成信息
 echo ""
 echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
-echo -e "${GREEN}✅ n8n 部署完成！${NC}"
+echo -e "${GREEN}              n8n 部署完成！${NC}"
 echo -e "${GREEN}════════════════════════════════════════════════════════════${NC}"
 echo ""
 echo -e "${CYAN}📦 部署信息${NC}"
-echo -e "  ${BLUE}•${NC} 边缘节点:    ${GREEN}agent01${NC}"
-echo -e "  ${BLUE}•${NC} 节点 IP:      ${GREEN}192.168.1.20${NC}"
-echo -e "  ${BLUE}•${NC} 数据目录:     ${GREEN}/data/n8n${NC}"
+echo -e "  ${BLUE}•${NC} 边缘节点:    ${GREEN}${EDGE_NODE}${NC}"
+echo -e "  ${BLUE}•${NC} 节点 IP:      ${GREEN}${NODE_IP}${NC}"
+echo -e "  ${BLUE}•${NC} 访问端口:     ${GREEN}${NODEPORT}${NC}"
+echo -e "  ${BLUE}•${NC} 数据目录:     ${GREEN}${STORAGE_PATH}${NC}"
 echo ""
 echo -e "${CYAN}🌐 访问地址${NC}"
-echo -e "  ${BLUE}•${NC} 集群内访问:  ${GREEN}http://n8n-service:5678${NC}"
-echo -e "  ${BLUE}•${NC} NodePort 访问: ${GREEN}http://192.168.1.20:31678${NC}"
+echo -e "  ${BLUE}•${NC} 本地访问:     ${GREEN}http://localhost:5678${NC} (在边缘节点)"
+echo -e "  ${BLUE}•${NC} NodePort访问: ${GREEN}http://${NODE_IP}:${NODEPORT}${NC}"
 echo ""
-echo -e "${CYAN}🔧 管理命令 (在控制中心执行)${NC}"
+echo -e "${CYAN}🔧 管理命令${NC}"
 echo -e "  ${BLUE}•${NC} 查看 Pod:     ${YELLOW}kubectl get pods -l app=n8n -o wide${NC}"
 echo -e "  ${BLUE}•${NC} 查看日志:     ${YELLOW}kubectl logs -f -l app=n8n${NC}"
+echo -e "  ${BLUE}•${NC} 重启部署:     ${YELLOW}kubectl rollout restart deployment n8n${NC}"
 echo ""
 
-# 可选：显示实时日志
-read -p "是否查看实时日志？(y/n): " -n 1 -r VIEW_LOGS
+# 询问是否查看日志
+read -p "是否查看实时日志？(y/n): " -n 1 -r
 echo
-if [[ $VIEW_LOGS =~ ^[Yy]$ ]]; then
+if [[ $REPLY =~ ^[Yy]$ ]]; then
+    echo -e "${BLUE}显示日志 (按 Ctrl+C 退出)${NC}"
+    sleep 2
     kubectl logs -f -l app=n8n
 fi
 
-exit 0
+echo -e "${GREEN}✅ 脚本执行完毕！${NC}"
 EOF
 
-chmod +x deploy-n8n-final-run-fixed.sh
+# 给脚本添加执行权限
+chmod +x deploy-n8n-new.sh
 
-echo -e "${GREEN}✅ 修复版脚本已创建！${NC}"
-echo -e "${YELLOW}现在运行修复版脚本：${NC} ./deploy-n8n-final-run-fixed.sh"
+echo -e "${GREEN}✅ 全新的独立脚本已创建！${NC}"
+echo -e "${YELLOW}现在运行：${NC} ./deploy-n8n-new.sh"
