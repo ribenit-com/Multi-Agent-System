@@ -3,7 +3,7 @@
 # 简单NAS挂载检测脚本
 # ============================================
 
-NAS_PATH="/mnt/truenas"
+NAS_PATH="/mnt/truenas"   # ✅ 改成实际可用挂载路径
 TEST_FILE="$NAS_PATH/test_write_$(date +%s).txt"
 
 echo "检测 NAS 挂载路径: $NAS_PATH"
@@ -19,7 +19,6 @@ fi
 # 2. 测试写入权限
 if echo "测试写入 $(date)" > "$TEST_FILE"; then
     echo "✅ 可以写入文件: $TEST_FILE"
-    # 测试完成后删除文件
     rm -f "$TEST_FILE"
 else
     echo "❌ 无法写入文件: $NAS_PATH"
