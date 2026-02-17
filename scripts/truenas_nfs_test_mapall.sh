@@ -8,13 +8,13 @@ LOCAL_MOUNT="/mnt/truenas"
 
 TIMESTAMP=$(date +%F_%H%M%S)
 HOST_IP=$(hostname -I | awk '{print $1}')
-LOCAL_LOG="/var/log/truenas_nfs_test_${TIMESTAMP}.log"
+LOCAL_LOG="/var/log/truenas_nfs_mount_${TIMESTAMP}.log"
 
-# 日志输出到控制台 + 文件
+# 日志输出到控制台和文件
 exec > >(tee -a "$LOCAL_LOG") 2>&1
 
 echo "======================================"
-echo " TrueNAS NFS Mount Test (auto fallback)"
+echo " TrueNAS NFS Mount Script (Product-level)"
 echo " Time       : $(date)"
 echo " Host IP    : $HOST_IP"
 echo " TrueNAS IP : $TRUENAS_IP"
@@ -23,34 +23,34 @@ echo " Local Mount: $LOCAL_MOUNT"
 echo " Log File   : $LOCAL_LOG"
 echo "======================================"
 
-# 1️⃣ 检查 NFS 工具
+# ======= 1️⃣ 检查 NFS 工具 =======
 if ! command -v mount.nfs >/dev/null 2>&1; then
     echo "[ERROR] mount.nfs not found. Install with: sudo apt install nfs-common -y"
     exit 1
 fi
 echo "[OK] NFS client tools found"
 
-# 2️⃣ 网络连通性检测
+# ======= 2️⃣ 网络检测 =======
 echo "[1] Testing connectivity to TrueNAS..."
 if ping -c 3 "$TRUENAS_IP" &>/dev/null; then
     echo "[OK] Network reachable"
 else
-    echo "[WARN] Cannot reach TrueNAS ($TRUENAS_IP), continuing..."
+    echo "[WARN] Cannot reach TrueNAS, continuing..."
 fi
 
-# 3️⃣ 创建挂载点
+# ======= 3️⃣ 创建挂载点 =======
 if [ ! -d "$LOCAL_MOUNT" ]; then
     echo "[2] Creating mount point $LOCAL_MOUNT..."
     sudo mkdir -p "$LOCAL_MOUNT"
 fi
 
-# 4️⃣ 卸载旧挂载
+# ======= 4️⃣ 卸载旧挂载 =======
 if mountpoint -q "$LOCAL_MOUNT"; then
     echo "[3] Unmounting existing mount at $LOCAL_MOUNT..."
     sudo umount "$LOCAL_MOUNT" || true
 fi
 
-# 5️⃣ 尝试挂载 NFS，防止阻塞
+# ======= 5️⃣ 尝试挂载 NFS（自动 fallback） =======
 MOUNT_SUCCESS=0
 for VER in 4.1 4 3; do
     echo "[4] Trying to mount NFS version $VER..."
@@ -60,16 +60,16 @@ for VER in 4.1 4 3; do
         MOUNT_SUCCESS=1
         break
     else
-        echo "[WARN] Failed to mount NFS version $VER, trying next..."
+        echo "[WARN] Failed to mount NFS version $VER"
     fi
 done
 
 if [ $MOUNT_SUCCESS -ne 1 ]; then
-    echo "[FAIL] NFS mount failed for all versions"
+    echo "[FAIL] All NFS mount attempts failed"
     exit 1
 fi
 
-# 6️⃣ 写入验证文件
+# ======= 6️⃣ 写入验证文件 =======
 VERIFY_FILE="$LOCAL_MOUNT/mount_verify_${HOST_IP}_${TIMESTAMP}.txt"
 echo "[5] Writing verification file..."
 {
@@ -80,7 +80,7 @@ echo "[5] Writing verification file..."
 } > "$VERIFY_FILE"
 echo "[✔] Verification file: $VERIFY_FILE"
 
-# 7️⃣ 写入 JSON 状态文件
+# ======= 7️⃣ 写入 JSON 状态文件 =======
 JSON_FILE="$LOCAL_MOUNT/mount_status_${HOST_IP}_${TIMESTAMP}.json"
 echo "[6] Writing JSON status file..."
 cat > "$JSON_FILE" <<EOF
@@ -96,7 +96,7 @@ EOF
 echo "[✔] JSON status file: $JSON_FILE"
 
 echo "======================================"
-echo "[DONE] TrueNAS NFS Mount Test Completed"
+echo "[DONE] TrueNAS NFS Mount Completed Successfully"
 echo " Log File   : $LOCAL_LOG"
 echo " Verify File: $VERIFY_FILE"
 echo " JSON File  : $JSON_FILE"
