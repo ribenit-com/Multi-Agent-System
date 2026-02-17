@@ -1,0 +1,18 @@
+使用方法
+
+创建目录：
+
+mkdir -p ~/mycmds/categories
+
+
+保存一级分类脚本，例如 network.sh、logs.sh、backup.sh
+
+保存启动脚本 mycmds.sh 并赋予可执行权限：
+
+chmod +x ~/mycmds/mycmds.sh
+chmod +x ~/mycmds/categories/*.sh
+
+
+启动：
+
+~/mycmds/mycmds.sh
