@@ -1,4 +1,4 @@
-cat << 'EOF' > deploy-n8n-auto.sh
+cat > deploy-n8n-fixed.sh << 'EOF'
 #!/bin/bash
 
 # 颜色定义
@@ -42,6 +42,11 @@ if [ -z "$EDGE_NODE" ]; then
     EDGE_NODE=$(kubectl get nodes | awk 'NR>1 {print $1; exit}')
 fi
 
+if [ -z "$EDGE_NODE" ]; then
+    echo -e "${RED}✗ 无法检测到边缘节点${NC}"
+    exit 1
+fi
+
 echo -e "${GREEN}✓ 检测到边缘节点: ${EDGE_NODE}${NC}"
 echo ""
 
@@ -61,6 +66,11 @@ if [ -z "$NODE_IP" ]; then
     read -p "IP地址: " NODE_IP
 fi
 
+if [ -z "$NODE_IP" ]; then
+    echo -e "${RED}✗ 无法获取节点IP${NC}"
+    exit 1
+fi
+
 echo -e "${GREEN}✓ 边缘节点IP: ${NODE_IP}${NC}"
 echo ""
 
@@ -68,43 +78,34 @@ echo ""
 echo -e "${YELLOW}[4/6] 准备存储目录...${NC}"
 STORAGE_PATH="/data/n8n"
 
-# 创建存储目录的DaemonSet（临时在边缘节点创建目录）
-cat << EOFS > /tmp/n8n-prepare.yaml
-apiVersion: apps/v1
-kind: DaemonSet
+# 创建存储目录的临时Pod
+cat << EOFS | kubectl apply -f - &> /dev/null
+apiVersion: v1
+kind: Pod
 metadata:
   name: n8n-prepare
   namespace: default
 spec:
-  selector:
-    matchLabels:
-      app: n8n-prepare
-  template:
-    metadata:
-      labels:
-        app: n8n-prepare
-    spec:
-      nodeName: ${EDGE_NODE}
-      containers:
-      - name: prepare
-        image: busybox
-        command: ["sh", "-c", "mkdir -p ${STORAGE_PATH} && chmod 777 ${STORAGE_PATH} && sleep 10"]
-        volumeMounts:
-        - name: host-root
-          mountPath: /host
-        securityContext:
-          privileged: true
-      volumes:
-      - name: host-root
-        hostPath:
-          path: /
-      restartPolicy: Always
+  nodeName: ${EDGE_NODE}
+  containers:
+  - name: prepare
+    image: busybox
+    command: ["sh", "-c", "mkdir -p ${STORAGE_PATH} && chmod 777 ${STORAGE_PATH}"]
+    volumeMounts:
+    - name: host-root
+      mountPath: /host
+    securityContext:
+      privileged: true
+  volumes:
+  - name: host-root
+    hostPath:
+      path: /
+  restartPolicy: Never
 EOFS
 
-kubectl apply -f /tmp/n8n-prepare.yaml &> /dev/null
+# 等待Pod完成
 sleep 5
-kubectl delete -f /tmp/n8n-prepare.yaml &> /dev/null
-rm -f /tmp/n8n-prepare.yaml
+kubectl delete pod n8n-prepare --force --grace-period=0 &> /dev/null
 
 echo -e "${GREEN}✓ 存储目录已准备: ${STORAGE_PATH}${NC}"
 echo ""
@@ -113,7 +114,7 @@ echo ""
 echo -e "${YELLOW}[5/6] 检查NodePort端口...${NC}"
 NODEPORT=31678
 # 简单检查端口是否被占用（通过查看现有Service）
-while kubectl get svc -A | grep -q ":${NODEPORT}/"; do
+while kubectl get svc -A | grep -q ":${NODEPORT}/TCP"; do
     echo -e "${YELLOW}端口 ${NODEPORT} 已被占用，尝试下一个...${NC}"
     NODEPORT=$((NODEPORT + 1))
     if [ $NODEPORT -gt 32767 ]; then
@@ -190,6 +191,11 @@ spec:
     app: n8n
 EOF
 
+if [ ! -f "n8n-deploy.yaml" ]; then
+    echo -e "${RED}✗ 配置文件生成失败${NC}"
+    exit 1
+fi
+
 echo -e "${GREEN}✓ 配置文件生成完成: n8n-deploy.yaml${NC}"
 echo ""
 
@@ -220,7 +226,7 @@ echo ""
 EOF
 
 # 添加执行权限
-chmod +x deploy-n8n-auto.sh
+chmod +x deploy-n8n-fixed.sh
 
-echo -e "${GREEN}脚本已创建！${NC}"
-echo -e "现在运行：${YELLOW}./deploy-n8n-auto.sh${NC}"
+echo -e "${GREEN}修复脚本已创建！${NC}"
+echo -e "现在运行：${YELLOW}./deploy-n8n-fixed.sh${NC}"
