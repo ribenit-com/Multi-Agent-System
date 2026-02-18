@@ -2,8 +2,6 @@
 set -e
 
 # -------------------- 配置区 --------------------
-GIT_REPO="git@github.com:你的用户名/Multi-Agent-k8s-gitops-postgres.git"
-GIT_BRANCH="main"
 CHART_DIR="postgres-chart"
 
 POSTGRES_USER="myuser"
@@ -128,28 +126,7 @@ spec:
   storageClassName: {{ .Values.persistence.storageClass }}
 EOF
 
-# -------------------- 2️⃣ 初始化或清理 Git 仓库 --------------------
-if [ -d ".git" ]; then
-  echo "⚡ Git 仓库已存在，安全清理 main 分支..."
-  git checkout --orphan temp-clean
-  git add .
-  git commit -m "Clean main commit"
-  git branch -D $GIT_BRANCH 2>/dev/null || true
-  git branch -m $GIT_BRANCH
-else
-  echo "⚡ 初始化 Git 仓库"
-  git init
-  git checkout -b $GIT_BRANCH
-  git add $CHART_DIR
-  git commit -m "Add PostgreSQL Helm chart"
-fi
-
-# 关联远程并强制 push
-git remote remove origin 2>/dev/null || true
-git remote add origin $GIT_REPO
-git push -f origin $GIT_BRANCH
-
-# -------------------- 3️⃣ 创建 Namespace 和 ArgoCD Application --------------------
+# -------------------- 2️⃣ 创建 Namespace 和 ArgoCD Application --------------------
 kubectl apply -f - <<EOF
 apiVersion: v1
 kind: Namespace
@@ -164,9 +141,9 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: '$GIT_REPO'
-    targetRevision: $GIT_BRANCH
     path: $CHART_DIR
+    repoURL: 'https://github.com/your-git-repo.git'  # 这里你上传后填自己仓库
+    targetRevision: main
     helm:
       valueFiles:
         - values.yaml
@@ -181,7 +158,4 @@ spec:
       - CreateNamespace=true
 EOF
 
-# -------------------- 4️⃣ 刷新 ArgoCD 缓存 --------------------
-argocd app sync postgres-official --refresh || true
-
-echo "✅ PostgreSQL Helm chart 已生成、Git 已推送，Namespace 和 ArgoCD Application 已创建并刷新缓存！"
+echo "✅ PostgreSQL Helm chart 已生成，Namespace 和 ArgoCD Application 已创建！"
