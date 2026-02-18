@@ -1,11 +1,16 @@
 #!/bin/bash
 set -e
 
+# --------------------------
+# 一键生成 PostgreSQL HA Helm Chart + ArgoCD Application
+# 自动生成 Helm Chart + ArgoCD Application YAML 并应用
+# --------------------------
+
 # 配置
 CHART_DIR="$HOME/gitops/postgres-ha-chart"
 NAMESPACE="database"
 ARGO_APP="postgres-ha"
-GITHUB_REPO="https://github.com/ribenit-com/Multi-Agent-k8s-gitops-postgres.git"  # 你上传到的 GitHub 仓库
+GITHUB_REPO="ribenit-com/Multi-Agent-k8s-gitops-postgres"
 
 echo "=== Step 1: 创建 Helm Chart 目录 ==="
 mkdir -p "$CHART_DIR/templates"
@@ -133,7 +138,7 @@ spec:
     app: postgres
 EOF
 
-echo "=== Step 7: 写入 ArgoCD Application YAML 并应用 ==="
+echo "=== Step 7: 应用 ArgoCD Application ==="
 kubectl apply -f - <<EOF
 apiVersion: argoproj.io/v1alpha1
 kind: Application
@@ -160,4 +165,4 @@ spec:
       - CreateNamespace=true
 EOF
 
-echo "=== PostgreSQL HA Helm Chart + ArgoCD Application 已创建 ==="
+echo "=== 完成：PostgreSQL HA Helm Chart + ArgoCD Application 已生成并应用 ==="
