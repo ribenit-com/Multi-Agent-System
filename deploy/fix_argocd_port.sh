@@ -1,106 +1,135 @@
 #!/bin/bash
+set -euo pipefail
 
-# ================================
-# ArgoCD NodePort 强制指定版本
-# 使用方式:
-# bash fix_argocd_port.sh 30099 30100
-# ================================
+# ===============================
+# 基础配置
+# ===============================
+ARGOCD_NAMESPACE="argocd"
+NODEPORT_PORT=30100
+HELM_VERSION="v3.14.4"
 
-HTTP_PORT=$1
-HTTPS_PORT=$2
+log() {
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
+}
 
-if [ -z "$HTTP_PORT" ] || [ -z "$HTTPS_PORT" ]; then
-  echo "❌ 用法: bash fix_argocd_port.sh <http_port> <https_port>"
-  exit 1
-fi
+echo
+log "🚀 开始部署 ArgoCD"
+echo
 
-if [ "$HTTP_PORT" -lt 30000 ] || [ "$HTTP_PORT" -gt 32767 ]; then
-  echo "❌ HTTP 端口必须在 30000-32767 之间"
-  exit 1
-fi
-
-if [ "$HTTPS_PORT" -lt 30000 ] || [ "$HTTPS_PORT" -gt 32767 ]; then
-  echo "❌ HTTPS 端口必须在 30000-32767 之间"
-  exit 1
-fi
-
-echo "🔹 检查 Kubernetes..."
+# ===============================
+# 1️⃣ 检查 Kubernetes
+# ===============================
+log "检查 Kubernetes 状态..."
 
 if ! kubectl cluster-info >/dev/null 2>&1; then
-  echo "❌ Kubernetes 未正常运行"
-  exit 1
+    log "❌ Kubernetes 未运行，请先启动集群"
+    exit 1
 fi
 
-echo "✅ Kubernetes 正常"
+log "✅ Kubernetes 正常"
 
-echo "🔹 修改 ArgoCD Service..."
+# ===============================
+# 2️⃣ 自动安装 Helm
+# ===============================
+if ! command -v helm >/dev/null 2>&1; then
+    log "🔹 未检测到 Helm，开始安装..."
 
-kubectl -n argocd delete svc argocd-server --ignore-not-found=true
+    TMP_DIR=$(mktemp -d)
 
-cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: Service
-metadata:
-  name: argocd-server
-  namespace: argocd
-spec:
-  type: NodePort
-  selector:
-    app.kubernetes.io/name: argocd-server
-  ports:
-    - name: http
-      port: 80
-      targetPort: 8080
-      nodePort: ${HTTP_PORT}
-      protocol: TCP
-    - name: https
-      port: 443
-      targetPort: 8080
-      nodePort: ${HTTPS_PORT}
-      protocol: TCP
+    curl -sSL https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz -o ${TMP_DIR}/helm.tar.gz
+    tar -xzf ${TMP_DIR}/helm.tar.gz -C ${TMP_DIR}
+
+    sudo mv ${TMP_DIR}/linux-amd64/helm /usr/local/bin/helm
+    sudo chmod +x /usr/local/bin/helm
+
+    rm -rf ${TMP_DIR}
+
+    log "✅ Helm 安装完成: $(helm version --short)"
+else
+    log "✅ Helm 已存在: $(helm version --short)"
+fi
+
+# ===============================
+# 3️⃣ 创建命名空间
+# ===============================
+if ! kubectl get ns "${ARGOCD_NAMESPACE}" >/dev/null 2>&1; then
+    kubectl create ns "${ARGOCD_NAMESPACE}"
+    log "已创建命名空间 ${ARGOCD_NAMESPACE}"
+else
+    log "命名空间已存在"
+fi
+
+# ===============================
+# 4️⃣ 添加 Helm 仓库
+# ===============================
+log "添加 Argo Helm 仓库..."
+
+helm repo add argo https://argoproj.github.io/argo-helm >/dev/null 2>&1 || true
+helm repo update >/dev/null 2>&1
+
+# ===============================
+# 5️⃣ 生成 values 文件
+# ===============================
+cat <<EOF > /tmp/argocd-values.yaml
+server:
+  service:
+    type: NodePort
+    nodePort: ${NODEPORT_PORT}
+    port: 443
+    targetPort: 8080
 EOF
 
-echo "✅ Service 修改完成"
+# ===============================
+# 6️⃣ 安装 ArgoCD
+# ===============================
+log "部署 ArgoCD..."
 
-sleep 3
+helm upgrade --install argocd argo/argo-cd \
+  -n ${ARGOCD_NAMESPACE} \
+  -f /tmp/argocd-values.yaml
 
-echo "🔹 当前 Service 状态:"
-kubectl -n argocd get svc argocd-server
+# ===============================
+# 7️⃣ 等待 Pod Ready
+# ===============================
+log "等待 ArgoCD Server 就绪..."
 
-# =========================
-# 自动开放防火墙
-# =========================
+kubectl -n ${ARGOCD_NAMESPACE} wait \
+  --for=condition=Ready pod \
+  -l app.kubernetes.io/name=argocd-server \
+  --timeout=300s
 
-echo "🔹 检查防火墙..."
+log "✅ ArgoCD 已启动"
+
+# ===============================
+# 8️⃣ 自动开放防火墙
+# ===============================
+log "开放防火墙端口 ${NODEPORT_PORT}"
 
 if command -v ufw >/dev/null 2>&1; then
-  echo "🔹 Ubuntu 防火墙检测到"
-  sudo ufw allow ${HTTP_PORT}/tcp
-  sudo ufw allow ${HTTPS_PORT}/tcp
-  echo "✅ ufw 已放行端口"
-elif command -v firewall-cmd >/dev/null 2>&1; then
-  echo "🔹 CentOS 防火墙检测到"
-  sudo firewall-cmd --add-port=${HTTP_PORT}/tcp --permanent
-  sudo firewall-cmd --add-port=${HTTPS_PORT}/tcp --permanent
-  sudo firewall-cmd --reload
-  echo "✅ firewalld 已放行端口"
-else
-  echo "⚠️ 未检测到防火墙或防火墙未开启"
+    sudo ufw allow ${NODEPORT_PORT}/tcp || true
+    sudo ufw reload || true
 fi
 
-sleep 2
+if command -v firewall-cmd >/dev/null 2>&1; then
+    sudo firewall-cmd --permanent --add-port=${NODEPORT_PORT}/tcp || true
+    sudo firewall-cmd --reload || true
+fi
 
-echo "🔹 检查端口监听..."
-ss -lntp | grep ${HTTPS_PORT}
+# ===============================
+# 9️⃣ 获取访问 IP
+# ===============================
+NODE_IP=$(hostname -I | awk '{print $1}')
 
-SERVER_IP=$(hostname -I | awk '{print $1}')
+ADMIN_PASSWORD=$(kubectl -n ${ARGOCD_NAMESPACE} \
+  get secret argocd-initial-admin-secret \
+  -o jsonpath="{.data.password}" | base64 -d)
 
-echo ""
-echo "======================================="
-echo "🎉 完成！"
-echo ""
-echo "访问地址:"
-echo "https://${SERVER_IP}:${HTTPS_PORT}"
-echo ""
-echo "如果浏览器提示证书不安全，选择继续访问即可。"
-echo "======================================="
+echo
+echo "============================================"
+echo "🎉 ArgoCD 部署完成"
+echo
+echo "访问地址: https://${NODE_IP}:${NODEPORT_PORT}"
+echo "用户名: admin"
+echo "密码: ${ADMIN_PASSWORD}"
+echo "============================================"
+echo
