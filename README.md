@@ -67,3 +67,155 @@
 笔记：
 Redis 检测是否安装，因为dify控件要用
 n8n  要先装PostgreSQL 再装n8n
+
+企业级脚本的推进：
+
+一、核心模块清单（初期企业级）
+模块	作用	部署方式
+Kubernetes 集群	容器调度、Pod 管理	手动/自动脚本
+KubeEdge	边缘节点管理、调度机器人	脚本安装 + Config
+ArgoCD	GitOps 部署控制中心 & 应用	Helm + 脚本
+PostgreSQL	中央数据库，存储任务/状态/日志	Helm + 脚本
+Redis	任务队列/缓存，支持 n8n/Worker	Helm + 脚本
+n8n	工作流引擎（调度机器人任务）	Helm + ArgoCD 管理
+Dify	AI Agent / 企业助手平台	Helm + ArgoCD 管理
+Worker	边缘任务处理	Helm + ArgoCD 管理
+Edge Agent	部署到边缘节点，执行机器人命令	Helm + ArgoCD 管理
+
+⚠ 注意：初期不需要 HA、多副本，单节点即可，只要方向正确。
+
+二、模块安装顺序（脚本顺序）
+
+基础设施
+
+Kubernetes 集群
+
+KubeEdge
+
+ArgoCD
+
+PostgreSQL
+
+Redis（单实例）
+
+应用层（后续通过 ArgoCD 管理）
+
+n8n
+
+Dify
+
+Worker
+
+Edge Agent
+
+三、企业级安装脚本思路
+
+每个模块都可以写一个 Bash 企业级脚本，特点：
+
+✅ 参数校验（端口、路径、节点）
+
+✅ 环境检查（kubectl、helm、node）
+
+✅ Helm 安装 / 升级
+
+✅ Namespace 自动创建
+
+✅ PVC / Volume 配置
+
+✅ 防火墙端口自动开放
+
+✅ 成功日志/HTML页面输出
+
+1️⃣ ArgoCD 安装脚本（参考你之前的脚本）
+
+参数：HTTP_PORT, HTTPS_PORT, NAMESPACE
+
+功能：
+
+检查 kubectl / helm
+
+创建 namespace
+
+helm upgrade --install argo/argo-cd
+
+rollout status
+
+生成 HTML 成功页
+
+2️⃣ PostgreSQL 安装脚本（企业级）
+
+参数：DB_NAME, USER, PASSWORD, NAMESPACE, STORAGE_SIZE
+
+功能：
+
+检查 helm / kubectl
+
+创建 namespace
+
+生成 values.yaml
+
+helm upgrade --install postgresql bitnami/postgresql -f values.yaml
+
+等待 pod ready
+
+输出访问信息（host/port/user/password）
+
+3️⃣ Redis 安装脚本（初期单实例即可）
+
+功能：
+
+Helm 安装 bitnami/redis
+
+Namespace 创建
+
+Pod 就绪检测
+
+输出 host/port/password
+
+4️⃣ n8n / Dify / Worker / Edge Agent 安装脚本
+
+不直接用脚本安装
+
+通过 ArgoCD Application 管理
+
+脚本作用：
+
+生成 Helm values.yaml
+
+创建 ArgoCD Application yaml
+
+apply 到 ArgoCD
+
+四、注意事项（企业级基线）
+
+数据库集中管理：PostgreSQL 放中央服务器，Edge 只做 Agent
+
+n8n 无状态：用 PostgreSQL 存储状态，方便横向扩展
+
+日志与监控：初期只要 pod logs + kubectl get pod
+
+防火墙：自动开放 ArgoCD / n8n / Redis / PostgreSQL 端口
+
+GitOps：一切应用都通过 ArgoCD 部署
+
+五、总结安装流程（企业级初期版）
+1️⃣ 脚本安装 Kubernetes + KubeEdge
+2️⃣ 脚本安装 ArgoCD
+3️⃣ 脚本安装 PostgreSQL
+4️⃣ 脚本安装 Redis
+5️⃣ ArgoCD 管理：
+    - n8n
+    - Dify
+    - Worker
+    - Edge Agent
+
+
+这种流程保证：
+
+初期稳定
+
+GitOps 扩展不踩坑
+
+未来升级 HA / 多副本直接接入
+
+
