@@ -20,7 +20,7 @@ POSTGRES_PASSWORD="mypassword"
 POSTGRES_DB_PREFIX="n8n"
 
 N8N_IMAGE="n8nio/n8n"
-N8N_TAG="2.224.0"   # 官方存在版本
+N8N_TAG="2.8.2"   # 官方稳定版本
 
 mkdir -p "$CHART_DIR/templates" "$LOG_DIR"
 
@@ -28,15 +28,6 @@ mkdir -p "$CHART_DIR/templates" "$LOG_DIR"
 echo "=== Step 0: 清理已有 PVC/PV ==="
 kubectl delete pvc -n $NAMESPACE -l app=$APP_LABEL --ignore-not-found --wait=false || true
 kubectl get pv -o name | grep n8n-pv- | xargs -r kubectl delete --ignore-not-found --wait=false || true
-
-# ---------- Step 0.5: 镜像可拉取检测 ----------
-echo "=== Step 0.5: 检查 n8n 官方镜像是否可拉取 ==="
-if ! docker pull ${N8N_IMAGE}:${N8N_TAG} >/dev/null 2>&1; then
-  echo "❌ 官方镜像 ${N8N_IMAGE}:${N8N_TAG} 无法拉取，请检查网络"
-  exit 1
-else
-  echo "✅ 镜像可拉取：${N8N_IMAGE}:${N8N_TAG}"
-fi
 
 # ---------- Step 1: 检测 StorageClass ----------
 echo "=== Step 1: 检测 StorageClass ==="
@@ -179,6 +170,7 @@ cat > "$HTML_FILE" <<EOF
 <meta charset="UTF-8">
 <title>n8n HA 企业交付指南</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="10">
 <style>
 body {margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f5f7fa}
 .container {display:flex;justify-content:center;align-items:flex-start;padding:30px}
