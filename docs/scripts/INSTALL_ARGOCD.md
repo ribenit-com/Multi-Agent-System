@@ -80,5 +80,16 @@ curl -fsSL https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main
 | ---------- | --------------------- |
 | HTTP_PORT  | ArgoCD HTTP NodePort  |
 | HTTPS_PORT | ArgoCD HTTPS NodePort |
+⚠ NodePort 范围必须为：30000-32767
 
+示例：
+sudo ./install_argocd_enterprise.sh 30099 30100
+
+
+🌐 部署完成后
+
+执行完成后终端会输出：
+访问地址: https://服务器IP:30100
+用户名: admin
+密码: xxxxxxxx
 
