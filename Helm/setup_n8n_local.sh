@@ -3,18 +3,18 @@ set -Eeuo pipefail
 
 # ===================================================
 # n8n HA 企业级一键部署 + HTML 交付页面
-# 支持 containerd 节点、Pod 状态可视化
+# 支持 containerd 节点、Pod 状态可视化、离线镜像导入
 # ===================================================
 
 # ---------- 配置 ----------
 CHART_DIR="$HOME/gitops/n8n-ha-chart"
 NAMESPACE="automation"
-ARGO_APP="n8n-ha"
 PVC_SIZE="10Gi"
 APP_LABEL="n8n"
 LOG_DIR="/mnt/truenas"
 HTML_FILE="${LOG_DIR}/n8n_ha_info.html"
 N8N_IMAGE="n8nio/n8n:2.8.2"
+TAR_FILE="$CHART_DIR/n8n_2.8.2.tar"
 
 mkdir -p "$CHART_DIR/templates" "$LOG_DIR"
 
@@ -23,14 +23,22 @@ echo "=== Step 0: 清理已有 PVC/PV ==="
 kubectl delete pvc -n $NAMESPACE -l app=$APP_LABEL --ignore-not-found --wait=false || true
 kubectl get pv -o name | grep n8n-pv- | xargs -r kubectl delete --ignore-not-found --wait=false || true
 
-# ---------- Step 0.5: 检查 containerd 镜像（离线/本地镜像） ----------
-echo "=== Step 0.5: 检查 containerd 镜像 ==="
-if ! sudo ctr -n k8s.io images ls | grep -q "${N8N_IMAGE}"; then
-  echo "⚠️ containerd 上没有 $N8N_IMAGE 镜像，请确保已手动导入离线镜像"
-  echo "导入命令示例: sudo ctr -n k8s.io image import n8n_2.8.2.tar"
-  exit 1
-else
+# ---------- Step 0.5: 检查 containerd 镜像或导入离线 tar ----------
+echo "=== Step 0.5: 检查 containerd 镜像或导入离线 tar ==="
+if sudo ctr -n k8s.io images ls | grep -q "${N8N_IMAGE}"; then
   echo "✅ containerd 上已存在镜像: $N8N_IMAGE"
+else
+  if [ -f "$TAR_FILE" ]; then
+    echo "⚠️ containerd 上没有 $N8N_IMAGE 镜像，检测到本地 tar 文件，开始导入..."
+    sudo ctr -n k8s.io image import "$TAR_FILE"
+    echo "✅ 镜像导入完成: $N8N_IMAGE"
+  else
+    echo "⚠️ containerd 上没有 $N8N_IMAGE 镜像，且本地未找到 tar 文件: $TAR_FILE"
+    echo "请先准备镜像文件，示例:"
+    echo "1) 离线导入: sudo ctr -n k8s.io image import n8n_2.8.2.tar"
+    echo "2) 联网拉取: sudo ctr -n k8s.io image pull docker.io/n8nio/n8n:2.8.2"
+    exit 1
+  fi
 fi
 
 # ---------- Step 1: 检测 StorageClass ----------
@@ -199,7 +207,6 @@ echo "=== Step 5: 生成 HTML 页面 ==="
 SERVICE_IP=$(kubectl -n $NAMESPACE get svc n8n -o jsonpath='{.spec.clusterIP}' || echo "127.0.0.1")
 PVC_LIST=$(kubectl -n $NAMESPACE get pvc -l app=$APP_LABEL -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
 REPLICA_COUNT=$(kubectl -n $NAMESPACE get sts n8n -o jsonpath='{.spec.replicas}' || echo "2")
-
 POD_STATUS=$(kubectl -n $NAMESPACE get pods -l app=$APP_LABEL -o custom-columns=NAME:.metadata.name,STATUS:.status.phase --no-headers || true)
 
 cat > "$HTML_FILE" <<EOF
