@@ -3,6 +3,7 @@ set -e
 
 # --------------------------
 # 一键生成 PostgreSQL HA Helm Chart + ArgoCD Application + PV
+# 自动清理冲突 PVC/PV/StorageClass
 # --------------------------
 
 # 配置
@@ -11,8 +12,15 @@ NAMESPACE="database"
 ARGO_APP="postgres-ha"
 GITHUB_REPO="ribenit-com/Multi-Agent-k8s-gitops-postgres"
 PVC_SIZE="10Gi"
+APP_LABEL="postgres"
 
-echo "=== Step 0: 检测集群 StorageClass ==="
+echo "=== Step 0: 清理已有冲突 PVC/PV ==="
+# 删除同名 PVC
+kubectl get pvc -n $NAMESPACE -l app=$APP_LABEL -o name | xargs -r kubectl delete -n $NAMESPACE
+# 删除同名 PV
+kubectl get pv -o name | grep postgres-pv- | xargs -r kubectl delete
+
+echo "=== Step 1: 检测集群 StorageClass ==="
 SC_NAME=$(kubectl get storageclass -o jsonpath='{.items[0].metadata.name}' || true)
 if [ -z "$SC_NAME" ]; then
   echo "⚠️ 集群没有 StorageClass，将不指定 StorageClass，并创建手动 PV"
@@ -20,10 +28,10 @@ else
   echo "✅ 检测到 StorageClass: $SC_NAME"
 fi
 
-echo "=== Step 1: 创建 Helm Chart 目录 ==="
+echo "=== Step 2: 创建 Helm Chart 目录 ==="
 mkdir -p "$CHART_DIR/templates"
 
-echo "=== Step 2: 写入 Chart.yaml ==="
+echo "=== Step 3: 写入 Chart.yaml ==="
 cat > "$CHART_DIR/Chart.yaml" <<EOF
 apiVersion: v2
 name: postgres-ha-chart
@@ -33,7 +41,7 @@ version: 1.0.0
 appVersion: "16.3"
 EOF
 
-echo "=== Step 3: 写入 values.yaml ==="
+echo "=== Step 4: 写入 values.yaml ==="
 cat > "$CHART_DIR/values.yaml" <<EOF
 replicaCount: 2
 
@@ -67,7 +75,7 @@ ha:
   replicationMode: "asynchronous"
 EOF
 
-echo "=== Step 4: 写入 templates/statefulset.yaml ==="
+echo "=== Step 5: 写入 templates/statefulset.yaml ==="
 cat > "$CHART_DIR/templates/statefulset.yaml" <<'EOF'
 apiVersion: apps/v1
 kind: StatefulSet
@@ -117,7 +125,7 @@ spec:
         {{- end }}
 EOF
 
-echo "=== Step 5: 写入 templates/service.yaml ==="
+echo "=== Step 6: 写入 templates/service.yaml ==="
 cat > "$CHART_DIR/templates/service.yaml" <<EOF
 apiVersion: v1
 kind: Service
@@ -133,7 +141,7 @@ spec:
     app: postgres
 EOF
 
-echo "=== Step 6: 写入 templates/headless-service.yaml ==="
+echo "=== Step 7: 写入 templates/headless-service.yaml ==="
 cat > "$CHART_DIR/templates/headless-service.yaml" <<EOF
 apiVersion: v1
 kind: Service
@@ -148,12 +156,11 @@ spec:
     app: postgres
 EOF
 
-# Step 7: 如果没有 StorageClass，自动创建 PV
+# Step 8: 如果没有 StorageClass，自动创建 PV
 if [ -z "$SC_NAME" ]; then
-  echo "=== Step 7: 创建手动 PV ==="
+  echo "=== Step 8: 创建手动 PV ==="
   for i in $(seq 0 1); do
     PV_NAME="postgres-pv-$i"
-    NODE_NAME=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')
     mkdir -p /mnt/data/postgres-$i
     cat > /tmp/$PV_NAME.yaml <<EOF
 apiVersion: v1
@@ -173,7 +180,7 @@ EOF
   done
 fi
 
-echo "=== Step 8: 应用 ArgoCD Application ==="
+echo "=== Step 9: 应用 ArgoCD Application ==="
 kubectl apply -f - <<EOF
 apiVersion: argoproj.io/v1alpha1
 kind: Application
