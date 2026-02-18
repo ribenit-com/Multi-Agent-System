@@ -3,13 +3,13 @@ set -Eeuo pipefail
 
 # ===================================================
 # Redis HA 企业级一键部署 + HTML 交付页面
-# 支持 Pod 状态可视化
-# 自动清理冲突 PVC/PV
-# 自动生成 Helm Chart + 手动 PV（如无 StorageClass）
-# 自动创建 ArgoCD Application
-# 自动轮询 ArgoCD Application 状态，确保 StatefulSet 部署成功
-# 等待 StatefulSet 就绪
-# 生成企业交付 HTML 页面
+# 功能：
+# 1. 自动清理冲突 PVC/PV
+# 2. 自动生成 Helm Chart + 手动 PV（如无 StorageClass）
+# 3. 自动创建 ArgoCD Application
+# 4. 等待 ArgoCD 同步完成
+# 5. 等待 StatefulSet 就绪
+# 6. 生成 HTML 页面显示 Pod 状态、PVC、访问方式、Python/Java 示例
 # ===================================================
 
 # ---------- 配置 ----------
@@ -201,4 +201,125 @@ spec:
       - CreateNamespace=true
 EOF
 
-echo "✅ Redis ArgoCD Application 已创建"
+# ---------- Step 4a: 等待 ArgoCD 同步 ----------
+echo "等待 Redis ArgoCD Application 同步完成..."
+for i in {1..60}; do
+  STATUS=$(kubectl -n argocd get app $ARGO_APP -o jsonpath='{.status.sync.status}' || echo "")
+  HEALTH=$(kubectl -n argocd get app $ARGO_APP -o jsonpath='{.status.health.status}' || echo "")
+  echo "[$i] ArgoCD sync=$STATUS, health=$HEALTH"
+  if [[ "$STATUS" == "Synced" && "$HEALTH" == "Healthy" ]]; then
+    echo "✅ Redis ArgoCD Application 已同步完成"
+    break
+  fi
+  sleep 5
+done
+
+# ---------- Step 4b: 检查 StatefulSet ----------
+echo "检查 Redis StatefulSet..."
+kubectl -n $NAMESPACE get sts -o wide || echo "⚠ 没有找到 StatefulSet"
+
+if kubectl -n $NAMESPACE get sts $APP_LABEL >/dev/null 2>&1; then
+  echo "等待 Redis StatefulSet 就绪..."
+  kubectl -n $NAMESPACE rollout status sts/$APP_LABEL --timeout=300s
+else
+  echo "❌ StatefulSet $APP_LABEL 不存在，请检查 Helm Chart 或 ArgoCD 日志"
+  exit 1
+fi
+
+# ---------- Step 5: 生成 HTML 页面 ----------
+echo "=== Step 5: 生成 HTML 页面 ==="
+
+SERVICE_IP=$(kubectl -n $NAMESPACE get svc $APP_LABEL -o jsonpath='{.spec.clusterIP}' || echo "127.0.0.1")
+PVC_LIST=$(kubectl -n $NAMESPACE get pvc -l app=$APP_LABEL -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
+REPLICA_COUNT=$(kubectl -n $NAMESPACE get sts $APP_LABEL -o jsonpath='{.spec.replicas}' || echo "2")
+
+# Pod 状态
+POD_STATUS=$(kubectl -n $NAMESPACE get pods -l app=$APP_LABEL -o custom-columns=NAME:.metadata.name,STATUS:.status.phase --no-headers)
+
+cat > "$HTML_FILE" <<EOF
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>Redis HA 企业交付指南</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body {margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f5f7fa}
+.container {display:flex;justify-content:center;align-items:flex-start;padding:30px}
+.card {background:#fff;padding:30px 40px;border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.08);width:650px}
+h2 {color:#1677ff;margin-bottom:20px;text-align:center}
+h3 {color:#444;margin-top:25px;margin-bottom:10px;border-bottom:1px solid #eee;padding-bottom:5px}
+pre {background:#f0f2f5;padding:12px;border-radius:6px;overflow-x:auto;font-family:monospace}
+.info {margin-bottom:10px}
+.label {font-weight:600;color:#333}
+.value {color:#555;margin-left:5px}
+.status-running {color:green;font-weight:600}
+.status-pending {color:orange;font-weight:600}
+.status-failed {color:red;font-weight:600}
+.footer {margin-top:20px;font-size:12px;color:#888;text-align:center}
+</style>
+</head>
+<body>
+<div class="container">
+<div class="card">
+<h2>🎉 Redis HA 安装完成</h2>
+
+<h3>数据库信息</h3>
+<div class="info"><span class="label">Namespace:</span><span class="value">$NAMESPACE</span></div>
+<div class="info"><span class="label">Service:</span><span class="value">$APP_LABEL</span></div>
+<div class="info"><span class="label">ClusterIP:</span><span class="value">$SERVICE_IP</span></div>
+<div class="info"><span class="label">副本数:</span><span class="value">$REPLICA_COUNT</span></div>
+
+<h3>PVC 列表</h3>
+<pre>$PVC_LIST</pre>
+
+<h3>Pod 状态</h3>
+<pre>
+EOF
+
+# Pod 状态 HTML
+while read -r line; do
+  POD_NAME=$(echo $line | awk '{print $1}')
+  STATUS=$(echo $line | awk '{print $2}')
+  CASE_CLASS="status-failed"
+  [[ "$STATUS" == "Running" ]] && CASE_CLASS="status-running"
+  [[ "$STATUS" == "Pending" ]] && CASE_CLASS="status-pending"
+  echo "<div class=\"$CASE_CLASS\">$POD_NAME : $STATUS</div>" >> "$HTML_FILE"
+done <<< "$POD_STATUS"
+
+cat >> "$HTML_FILE" <<EOF
+</pre>
+
+<h3>访问方式</h3>
+<pre>
+kubectl -n $NAMESPACE port-forward svc/$APP_LABEL 6379:6379
+redis-cli -h localhost -p 6379
+</pre>
+
+<h3>Python 示例</h3>
+<pre>
+import redis
+r = redis.Redis(host="$SERVICE_IP", port=6379)
+r.set('hello','world')
+print(r.get('hello'))
+</pre>
+
+<h3>Java 示例</h3>
+<pre>
+String url = "redis://$SERVICE_IP:6379";
+Jedis jedis = new Jedis(url);
+jedis.set("hello", "world");
+System.out.println(jedis.get("hello"));
+</pre>
+
+<div class="footer">
+生成时间: $(date '+%Y-%m-%d %H:%M:%S')
+</div>
+
+</div>
+</div>
+</body>
+</html>
+EOF
+
+echo "✅ Redis HA 企业交付 HTML 页面已生成: $HTML_FILE"
