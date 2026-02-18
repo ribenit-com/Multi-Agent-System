@@ -1,12 +1,24 @@
 #!/bin/bash
 set -e
 
-# -------------------- 1️⃣ 创建 Helm chart 目录 --------------------
-CHART_DIR=postgres-chart
+# -------------------- 配置区 --------------------
+GIT_REPO="git@github.com:你的用户名/Multi-Agent-k8s-gitops-postgres.git"
+GIT_BRANCH="main"
+CHART_DIR="postgres-chart"
 
+POSTGRES_USER="myuser"
+POSTGRES_PASSWORD="mypassword"
+POSTGRES_DB="mydb"
+PVC_NAME="postgres-pvc"
+STORAGE_CLASS="standard"
+STORAGE_SIZE="10Gi"
+IMAGE_REGISTRY="docker.m.daocloud.io"
+IMAGE_REPO="library/postgres"
+IMAGE_TAG="16.3"
+
+# -------------------- 1️⃣ 创建 Helm chart --------------------
 mkdir -p $CHART_DIR/templates
 
-# -------------------- 2️⃣ Chart.yaml --------------------
 cat > $CHART_DIR/Chart.yaml <<EOF
 apiVersion: v2
 name: postgres-chart
@@ -16,26 +28,25 @@ version: 1.0.0
 appVersion: "16.3"
 EOF
 
-# -------------------- 3️⃣ values.yaml --------------------
 cat > $CHART_DIR/values.yaml <<EOF
 replicaCount: 1
 
 image:
-  registry: docker.m.daocloud.io
-  repository: library/postgres
-  tag: "16.3"
+  registry: $IMAGE_REGISTRY
+  repository: $IMAGE_REPO
+  tag: "$IMAGE_TAG"
   pullPolicy: IfNotPresent
 
 postgresql:
-  username: myuser
-  password: mypassword
-  database: mydb
+  username: $POSTGRES_USER
+  password: $POSTGRES_PASSWORD
+  database: $POSTGRES_DB
 
 persistence:
   enabled: true
-  existingClaim: postgres-pvc
-  size: 10Gi
-  storageClass: standard
+  existingClaim: $PVC_NAME
+  size: $STORAGE_SIZE
+  storageClass: $STORAGE_CLASS
 
 resources:
   limits:
@@ -46,7 +57,6 @@ resources:
     memory: 512Mi
 EOF
 
-# -------------------- 4️⃣ templates/deployment.yaml --------------------
 cat > $CHART_DIR/templates/deployment.yaml <<EOF
 apiVersion: apps/v1
 kind: Deployment
@@ -88,7 +98,6 @@ spec:
             claimName: {{ .Values.persistence.existingClaim }}
 EOF
 
-# -------------------- 5️⃣ templates/service.yaml --------------------
 cat > $CHART_DIR/templates/service.yaml <<EOF
 apiVersion: v1
 kind: Service
@@ -105,7 +114,6 @@ spec:
     app: {{ include "postgres-chart.name" . }}
 EOF
 
-# -------------------- 6️⃣ templates/pvc.yaml --------------------
 cat > $CHART_DIR/templates/pvc.yaml <<EOF
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -120,7 +128,15 @@ spec:
   storageClassName: {{ .Values.persistence.storageClass }}
 EOF
 
-# -------------------- 7️⃣ 创建 Namespace 和 ArgoCD Application --------------------
+# -------------------- 2️⃣ 初始化 Git 仓库 --------------------
+git init
+git checkout -b $GIT_BRANCH
+git add $CHART_DIR
+git commit -m "Add PostgreSQL 16.3 Helm chart"
+git remote add origin $GIT_REPO
+git push -u origin $GIT_BRANCH
+
+# -------------------- 3️⃣ 创建 Namespace 和 ArgoCD Application --------------------
 kubectl apply -f - <<EOF
 apiVersion: v1
 kind: Namespace
@@ -135,9 +151,9 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: 'https://github.com/ribenit-com/Multi-Agent-k8s-gitops-postgres.git'  # 替换为你自己的仓库
-    targetRevision: main
-    path: postgres-chart
+    repoURL: '$GIT_REPO'
+    targetRevision: $GIT_BRANCH
+    path: $CHART_DIR
     helm:
       valueFiles:
         - values.yaml
@@ -152,5 +168,4 @@ spec:
       - CreateNamespace=true
 EOF
 
-echo "✅ Helm chart 生成完毕，Namespace 和 ArgoCD Application 已创建！"
-echo "请 push 你的 Helm chart 到 Git 仓库，ArgoCD 会自动部署 PostgreSQL 官方镜像。"
+echo "✅ Helm chart 已生成并 push，Namespace 和 ArgoCD Application 已创建！"
