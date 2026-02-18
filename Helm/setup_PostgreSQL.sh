@@ -135,7 +135,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: 'https://github.com/你的用户名/你的仓库.git'  # 替换为你自己的仓库
+    repoURL: 'https://github.com/ribenit-com/Multi-Agent-k8s-gitops-postgres.git'  # 替换为你自己的仓库
     targetRevision: main
     path: postgres-chart
     helm:
