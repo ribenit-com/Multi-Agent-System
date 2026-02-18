@@ -1,76 +1,77 @@
 #!/bin/bash
 set -e
 
-# -------------------- 配置区 --------------------
-CHART_DIR="postgres-chart"
+# 配置
+CHART_DIR="$HOME/gitops/postgres-ha-chart"
+NAMESPACE="database"
+ARGO_APP="postgres-ha"
+GITHUB_REPO="https://github.com/ribenit-com/Multi-Agent-k8s-gitops-postgres.git"  # 你上传到的 GitHub 仓库
 
-POSTGRES_USER="myuser"
-POSTGRES_PASSWORD="mypassword"
-POSTGRES_DB="mydb"
-PVC_NAME="postgres-pvc"
-STORAGE_CLASS="standard"
-STORAGE_SIZE="10Gi"
-IMAGE_REGISTRY="docker.m.daocloud.io"
-IMAGE_REPO="library/postgres"
-IMAGE_TAG="16.3"
+echo "=== Step 1: 创建 Helm Chart 目录 ==="
+mkdir -p "$CHART_DIR/templates"
 
-# -------------------- 1️⃣ 创建 Helm chart --------------------
-mkdir -p $CHART_DIR/templates
-
-cat > $CHART_DIR/Chart.yaml <<EOF
+echo "=== Step 2: 写入 Chart.yaml ==="
+cat > "$CHART_DIR/Chart.yaml" <<EOF
 apiVersion: v2
-name: postgres-chart
-description: "Official PostgreSQL 16.3 Helm Chart for production"
+name: postgres-ha-chart
+description: "Official PostgreSQL 16.3 Helm Chart for HA production"
 type: application
 version: 1.0.0
 appVersion: "16.3"
 EOF
 
-cat > $CHART_DIR/values.yaml <<EOF
-replicaCount: 1
+echo "=== Step 3: 写入 values.yaml ==="
+cat > "$CHART_DIR/values.yaml" <<EOF
+replicaCount: 3
 
 image:
-  registry: $IMAGE_REGISTRY
-  repository: $IMAGE_REPO
-  tag: "$IMAGE_TAG"
+  registry: docker.m.daocloud.io
+  repository: library/postgres
+  tag: "16.3"
   pullPolicy: IfNotPresent
 
 postgresql:
-  username: $POSTGRES_USER
-  password: $POSTGRES_PASSWORD
-  database: $POSTGRES_DB
+  username: myuser
+  password: mypassword
+  database: mydb
 
 persistence:
   enabled: true
-  existingClaim: $PVC_NAME
-  size: $STORAGE_SIZE
-  storageClass: $STORAGE_CLASS
+  size: 10Gi
+  storageClass: standard
 
 resources:
-  limits:
-    cpu: 500m
-    memory: 1Gi
   requests:
-    cpu: 250m
     memory: 512Mi
+    cpu: 250m
+  limits:
+    memory: 1Gi
+    cpu: 500m
+
+ha:
+  enabled: true
+  synchronousCommit: "on"
+  replicationMode: "asynchronous"
 EOF
 
-cat > $CHART_DIR/templates/deployment.yaml <<EOF
+echo "=== Step 4: 写入 templates/statefulset.yaml ==="
+cat > "$CHART_DIR/templates/statefulset.yaml" <<'EOF'
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
-  name: {{ include "postgres-chart.fullname" . }}
+  name: postgres
   labels:
-    app: {{ include "postgres-chart.name" . }}
+    app: postgres
 spec:
+  serviceName: postgres-headless
   replicas: {{ .Values.replicaCount }}
   selector:
     matchLabels:
-      app: {{ include "postgres-chart.name" . }}
+      app: postgres
   template:
     metadata:
       labels:
-        app: {{ include "postgres-chart.name" . }}
+        app: postgres
     spec:
       containers:
         - name: postgres
@@ -85,71 +86,72 @@ spec:
               value: {{ .Values.postgresql.database | quote }}
           ports:
             - containerPort: 5432
-          resources:
-            {{- toYaml .Values.resources | nindent 12 }}
           volumeMounts:
             - name: data
               mountPath: /var/lib/postgresql/data
-      volumes:
-        - name: data
-          persistentVolumeClaim:
-            claimName: {{ .Values.persistence.existingClaim }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}
+        storageClassName: {{ .Values.persistence.storageClass }}
 EOF
 
-cat > $CHART_DIR/templates/service.yaml <<EOF
+echo "=== Step 5: 写入 templates/service.yaml ==="
+cat > "$CHART_DIR/templates/service.yaml" <<EOF
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "postgres-chart.fullname" . }}
+  name: postgres
 spec:
   type: ClusterIP
   ports:
     - port: 5432
       targetPort: 5432
-      protocol: TCP
       name: postgres
   selector:
-    app: {{ include "postgres-chart.name" . }}
+    app: postgres
 EOF
 
-cat > $CHART_DIR/templates/pvc.yaml <<EOF
+echo "=== Step 6: 写入 templates/headless-service.yaml ==="
+cat > "$CHART_DIR/templates/headless-service.yaml" <<EOF
 apiVersion: v1
-kind: PersistentVolumeClaim
+kind: Service
 metadata:
-  name: {{ .Values.persistence.existingClaim }}
+  name: postgres-headless
 spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: {{ .Values.persistence.size }}
-  storageClassName: {{ .Values.persistence.storageClass }}
+  clusterIP: None
+  ports:
+    - port: 5432
+      targetPort: 5432
+  selector:
+    app: postgres
 EOF
 
-# -------------------- 2️⃣ 创建 Namespace 和 ArgoCD Application --------------------
+echo "=== Step 7: 写入 ArgoCD Application YAML 并应用 ==="
 kubectl apply -f - <<EOF
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: database
----
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: postgres-official
+  name: $ARGO_APP
   namespace: argocd
 spec:
   project: default
   source:
-    path: $CHART_DIR
-    repoURL: 'https://github.com/your-git-repo.git'  # 这里你上传后填自己仓库
+    repoURL: 'https://github.com/$GITHUB_REPO.git'
     targetRevision: main
+    path: postgres-ha-chart
     helm:
       valueFiles:
         - values.yaml
   destination:
     server: 'https://kubernetes.default.svc'
-    namespace: database
+    namespace: $NAMESPACE
   syncPolicy:
     automated:
       prune: true
@@ -158,4 +160,4 @@ spec:
       - CreateNamespace=true
 EOF
 
-echo "✅ PostgreSQL Helm chart 已生成，Namespace 和 ArgoCD Application 已创建！"
+echo "=== PostgreSQL HA Helm Chart + ArgoCD Application 已创建 ==="
