@@ -17,7 +17,7 @@ HTML_FILE="${LOG_DIR}/postgres_ha_info.html"
 
 mkdir -p "$CHART_DIR/templates" "$LOG_DIR"
 
-# ---------- Step 0: 清理已有冲突 PVC/PV ----------
+# ---------- Step 0: 清理已有 PVC/PV ----------
 echo "=== Step 0: 清理已有 PVC/PV ==="
 kubectl get pvc -n $NAMESPACE -l app=$APP_LABEL -o name | xargs -r kubectl delete -n $NAMESPACE
 kubectl get pv -o name | grep postgres-pv- | xargs -r kubectl delete || true
@@ -211,13 +211,34 @@ spec:
       - CreateNamespace=true
 EOF
 
-echo "等待 PostgreSQL StatefulSet 就绪..."
-kubectl -n $NAMESPACE rollout status sts/$APP_LABEL --timeout=300s
+# ---------- Step 4a: 等待 ArgoCD 同步 ----------
+echo "等待 ArgoCD Application 同步完成..."
+for i in {1..60}; do
+  STATUS=$(kubectl -n argocd get app $ARGO_APP -o jsonpath='{.status.sync.status}' || echo "")
+  HEALTH=$(kubectl -n argocd get app $ARGO_APP -o jsonpath='{.status.health.status}' || echo "")
+  echo "[$i] ArgoCD sync=$STATUS, health=$HEALTH"
+  if [[ "$STATUS" == "Synced" && "$HEALTH" == "Healthy" ]]; then
+    echo "✅ ArgoCD Application 已同步完成"
+    break
+  fi
+  sleep 5
+done
+
+# ---------- Step 4b: 检查 StatefulSet ----------
+echo "检查 StatefulSet..."
+kubectl -n $NAMESPACE get sts -o wide || echo "⚠ 没有找到 StatefulSet"
+
+if kubectl -n $NAMESPACE get sts $APP_LABEL >/dev/null 2>&1; then
+  echo "等待 PostgreSQL StatefulSet 就绪..."
+  kubectl -n $NAMESPACE rollout status sts/$APP_LABEL --timeout=300s
+else
+  echo "❌ StatefulSet $APP_LABEL 不存在，请检查 Helm Chart 或 ArgoCD 日志"
+  echo "查看 ArgoCD controller 日志: kubectl -n argocd logs deploy/argocd-application-controller"
+  exit 1
+fi
 
 # ---------- Step 5: 生成企业交付 HTML ----------
 echo "=== Step 5: 生成 HTML 页面 ==="
-
-# 获取集群信息
 SERVICE_IP=$(kubectl -n $NAMESPACE get svc $APP_LABEL -o jsonpath='{.spec.clusterIP}' || echo "127.0.0.1")
 NODE_PORT=$(kubectl -n $NAMESPACE get svc $APP_LABEL -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || echo "")
 PVC_LIST=$(kubectl -n $NAMESPACE get pvc -l app=$APP_LABEL -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
@@ -230,82 +251,25 @@ REPLICA_COUNT=$(kubectl -n $NAMESPACE get sts $APP_LABEL -o jsonpath='{.spec.rep
 cat > "$HTML_FILE" <<EOF
 <!DOCTYPE html>
 <html lang="zh">
-<head>
-<meta charset="UTF-8">
-<title>PostgreSQL HA 企业交付指南</title>
-<style>
-body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto;background:#f5f7fa}
-.container{padding:40px;max-width:900px;margin:auto}
-.card{background:#fff;padding:30px;border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,.08);margin-bottom:30px}
-.title{font-size:24px;font-weight:700;margin-bottom:20px;color:#333}
-.subtitle{font-size:18px;font-weight:600;margin-bottom:10px;color:#555}
-.text{font-size:14px;color:#666;line-height:1.6}
-.code{background:#f0f2f5;padding:10px;border-radius:6px;font-family:monospace;margin-top:5px;display:block;white-space:pre-wrap}
-</style>
-</head>
+<head><meta charset="UTF-8"><title>PostgreSQL HA 企业交付指南</title></head>
 <body>
-<div class="container">
-
-<div class="card">
-<div class="title">🎉 PostgreSQL HA 安装完成</div>
-<div class="text">本指南说明如何访问和使用 PostgreSQL HA 集群。</div>
-</div>
-
-<div class="card">
-<div class="subtitle">1️⃣ 数据库基本信息</div>
-<div class="text">
-Namespace: <span class="code">$NAMESPACE</span><br>
-Service: <span class="code">$APP_LABEL</span><br>
-ClusterIP: <span class="code">$SERVICE_IP</span><br>
-EOF
-
-if [ -n "$NODE_PORT" ]; then
-  echo "NodePort: <span class=\"code\">$NODE_PORT</span><br>" >> "$HTML_FILE"
-fi
-
-cat >> "$HTML_FILE" <<EOF
-用户名: <span class="code">$DB_USER</span><br>
-密码: <span class="code">$DB_PASSWORD</span><br>
-数据库: <span class="code">$DB_NAME</span><br>
-副本数: <span class="code">$REPLICA_COUNT</span><br>
-</div>
-</div>
-
-<div class="card">
-<div class="subtitle">2️⃣ PVC / 存储信息</div>
-<div class="text">
-PVC 列表：
-<pre class="code">
-$PVC_LIST
-</pre>
-大小：$PVC_SIZE
-</div>
-</div>
-
-<div class="card">
-<div class="subtitle">3️⃣ 访问方式</div>
-<div class="text">
-<ul>
-<li>集群内部访问: Service 名称 <code>$APP_LABEL</code>，端口 5432</li>
-<li>集群外访问: Port-Forward 或 NodePort</li>
-<pre class="code">
-kubectl -n $NAMESPACE port-forward svc/$APP_LABEL 5432:5432
-psql -h localhost -U $DB_USER -d $DB_NAME
-</pre>
-</ul>
-</div>
-</div>
-
-<div class="card">
-<div class="subtitle">4️⃣ 数据库连接示例</div>
-<div class="text">
-<b>psql 命令行:</b>
-<pre class="code">
-psql -h $SERVICE_IP -U $DB_USER -d $DB_NAME
-</pre>
-
-<b>Python (psycopg2):</b>
-<pre class="code">
+<h2>🎉 PostgreSQL HA 安装完成</h2>
+<h3>数据库信息</h3>
+Namespace: $NAMESPACE<br>
+Service: $APP_LABEL<br>
+ClusterIP: $SERVICE_IP<br>
+NodePort: ${NODE_PORT:-N/A}<br>
+用户名: $DB_USER<br>
+密码: $DB_PASSWORD<br>
+数据库: $DB_NAME<br>
+副本数: $REPLICA_COUNT<br>
+<h3>PVC 列表</h3>
+<pre>$PVC_LIST</pre>
+<h3>访问方式</h3>
+kubectl -n $NAMESPACE port-forward svc/$APP_LABEL 5432:5432<br>
+psql -h localhost -U $DB_USER -d $DB_NAME<br>
+<h3>Python 示例</h3>
+<pre>
 import psycopg2
 conn = psycopg2.connect(
     host="$SERVICE_IP",
@@ -317,35 +281,15 @@ cur = conn.cursor()
 cur.execute("SELECT version();")
 print(cur.fetchone())
 </pre>
-
-<b>Java (JDBC):</b>
-<pre class="code">
+<h3>Java 示例</h3>
+<pre>
 String url = "jdbc:postgresql://$SERVICE_IP:5432/$DB_NAME";
 Properties props = new Properties();
 props.setProperty("user","$DB_USER");
 props.setProperty("password","$DB_PASSWORD");
 Connection conn = DriverManager.getConnection(url, props);
 </pre>
-</div>
-</div>
-
-<div class="card">
-<div class="subtitle">5️⃣ 注意事项</div>
-<div class="text">
-<ul>
-<li>首次使用请修改数据库密码</li>
-<li>建议使用 Kubernetes Secret 管理密码</li>
-<li>HA 模式下主从同步为异步模式</li>
-<li>可通过 ArgoCD 查看 Helm Chart 同步状态</li>
-</ul>
-</div>
-</div>
-
-<div class="card">
-生成时间：$(date '+%Y-%m-%d %H:%M:%S')
-</div>
-
-</div>
+生成时间: $(date '+%Y-%m-%d %H:%M:%S')
 </body>
 </html>
 EOF
