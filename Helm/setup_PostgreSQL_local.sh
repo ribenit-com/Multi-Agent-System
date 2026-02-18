@@ -3,6 +3,7 @@ set -Eeuo pipefail
 
 # ===================================================
 # PostgreSQL HA 企业级一键部署 + HTML 交付页面
+# 支持 Pod 状态可视化
 # ===================================================
 
 # ---------- 配置 ----------
@@ -233,12 +234,12 @@ if kubectl -n $NAMESPACE get sts $APP_LABEL >/dev/null 2>&1; then
   kubectl -n $NAMESPACE rollout status sts/$APP_LABEL --timeout=300s
 else
   echo "❌ StatefulSet $APP_LABEL 不存在，请检查 Helm Chart 或 ArgoCD 日志"
-  echo "查看 ArgoCD controller 日志: kubectl -n argocd logs deploy/argocd-application-controller"
   exit 1
 fi
 
-# ---------- Step 5: 生成企业交付 HTML ----------
+# ---------- Step 5: 生成企业交付 HTML (带 CSS + Pod 状态) ----------
 echo "=== Step 5: 生成 HTML 页面 ==="
+
 SERVICE_IP=$(kubectl -n $NAMESPACE get svc $APP_LABEL -o jsonpath='{.spec.clusterIP}' || echo "127.0.0.1")
 NODE_PORT=$(kubectl -n $NAMESPACE get svc $APP_LABEL -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || echo "")
 PVC_LIST=$(kubectl -n $NAMESPACE get pvc -l app=$APP_LABEL -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
@@ -248,26 +249,73 @@ DB_PASSWORD="mypassword"
 DB_NAME="mydb"
 REPLICA_COUNT=$(kubectl -n $NAMESPACE get sts $APP_LABEL -o jsonpath='{.spec.replicas}' || echo "2")
 
+# Pod 状态
+POD_STATUS=$(kubectl -n $NAMESPACE get pods -l app=$APP_LABEL -o custom-columns=NAME:.metadata.name,STATUS:.status.phase --no-headers)
+
 cat > "$HTML_FILE" <<EOF
 <!DOCTYPE html>
 <html lang="zh">
-<head><meta charset="UTF-8"><title>PostgreSQL HA 企业交付指南</title></head>
+<head>
+<meta charset="UTF-8">
+<title>PostgreSQL HA 企业交付指南</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body {margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f5f7fa}
+.container {display:flex;justify-content:center;align-items:flex-start;padding:30px}
+.card {background:#fff;padding:30px 40px;border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.08);width:650px}
+h2 {color:#1677ff;margin-bottom:20px;text-align:center}
+h3 {color:#444;margin-top:25px;margin-bottom:10px;border-bottom:1px solid #eee;padding-bottom:5px}
+pre {background:#f0f2f5;padding:12px;border-radius:6px;overflow-x:auto;font-family:monospace}
+.info {margin-bottom:10px}
+.label {font-weight:600;color:#333}
+.value {color:#555;margin-left:5px}
+.status-running {color:green;font-weight:600}
+.status-pending {color:orange;font-weight:600}
+.status-failed {color:red;font-weight:600}
+.footer {margin-top:20px;font-size:12px;color:#888;text-align:center}
+</style>
+</head>
 <body>
+<div class="container">
+<div class="card">
 <h2>🎉 PostgreSQL HA 安装完成</h2>
+
 <h3>数据库信息</h3>
-Namespace: $NAMESPACE<br>
-Service: $APP_LABEL<br>
-ClusterIP: $SERVICE_IP<br>
-NodePort: ${NODE_PORT:-N/A}<br>
-用户名: $DB_USER<br>
-密码: $DB_PASSWORD<br>
-数据库: $DB_NAME<br>
-副本数: $REPLICA_COUNT<br>
+<div class="info"><span class="label">Namespace:</span><span class="value">$NAMESPACE</span></div>
+<div class="info"><span class="label">Service:</span><span class="value">$APP_LABEL</span></div>
+<div class="info"><span class="label">ClusterIP:</span><span class="value">$SERVICE_IP</span></div>
+<div class="info"><span class="label">NodePort:</span><span class="value">${NODE_PORT:-N/A}</span></div>
+<div class="info"><span class="label">用户名:</span><span class="value">$DB_USER</span></div>
+<div class="info"><span class="label">密码:</span><span class="value">$DB_PASSWORD</span></div>
+<div class="info"><span class="label">数据库:</span><span class="value">$DB_NAME</span></div>
+<div class="info"><span class="label">副本数:</span><span class="value">$REPLICA_COUNT</span></div>
+
 <h3>PVC 列表</h3>
 <pre>$PVC_LIST</pre>
+
+<h3>Pod 状态</h3>
+<pre>
+EOF
+
+# 将 Pod 状态添加 HTML 并带颜色
+while read -r line; do
+  POD_NAME=$(echo $line | awk '{print $1}')
+  STATUS=$(echo $line | awk '{print $2}')
+  CASE_CLASS="status-failed"
+  [[ "$STATUS" == "Running" ]] && CASE_CLASS="status-running"
+  [[ "$STATUS" == "Pending" ]] && CASE_CLASS="status-pending"
+  echo "<div class=\"$CASE_CLASS\">$POD_NAME : $STATUS</div>" >> "$HTML_FILE"
+done <<< "$POD_STATUS"
+
+cat >> "$HTML_FILE" <<EOF
+</pre>
+
 <h3>访问方式</h3>
-kubectl -n $NAMESPACE port-forward svc/$APP_LABEL 5432:5432<br>
-psql -h localhost -U $DB_USER -d $DB_NAME<br>
+<pre>
+kubectl -n $NAMESPACE port-forward svc/$APP_LABEL 5432:5432
+psql -h localhost -U $DB_USER -d $DB_NAME
+</pre>
+
 <h3>Python 示例</h3>
 <pre>
 import psycopg2
@@ -281,6 +329,7 @@ cur = conn.cursor()
 cur.execute("SELECT version();")
 print(cur.fetchone())
 </pre>
+
 <h3>Java 示例</h3>
 <pre>
 String url = "jdbc:postgresql://$SERVICE_IP:5432/$DB_NAME";
@@ -289,7 +338,13 @@ props.setProperty("user","$DB_USER");
 props.setProperty("password","$DB_PASSWORD");
 Connection conn = DriverManager.getConnection(url, props);
 </pre>
+
+<div class="footer">
 生成时间: $(date '+%Y-%m-%d %H:%M:%S')
+</div>
+
+</div>
+</div>
 </body>
 </html>
 EOF
