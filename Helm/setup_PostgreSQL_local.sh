@@ -4,6 +4,7 @@ set -e
 # --------------------------
 # 一键生成 PostgreSQL HA Helm Chart + ArgoCD Application + PV
 # 自动清理冲突 PVC/PV/StorageClass
+# 交付1.0
 # --------------------------
 
 # 配置
