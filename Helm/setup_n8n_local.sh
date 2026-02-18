@@ -29,6 +29,10 @@ echo "=== Step 0: 清理已有 PVC/PV ==="
 kubectl delete pvc -n $NAMESPACE -l app=$APP_LABEL --ignore-not-found --wait=false || true
 kubectl get pv -o name | grep n8n-pv- | xargs -r kubectl delete --ignore-not-found --wait=false || true
 
+# ---------- Step 0.5: 节点提前拉取 n8n 镜像，显示下载进度 ----------
+echo "=== Step 0.5: 在节点上提前拉取 n8n 镜像 ==="
+docker pull ${N8N_IMAGE}:${N8N_TAG}
+
 # ---------- Step 1: 检测 StorageClass ----------
 echo "=== Step 1: 检测 StorageClass ==="
 SC_NAME=$(kubectl get storageclass -o jsonpath='{.items[0].metadata.name}' || true)
@@ -226,7 +230,6 @@ kubectl -n $NAMESPACE port-forward svc/n8n 5678:5678
 
 <h3>Python 示例</h3>
 <pre>
-# 安装依赖: pip install psycopg2-binary
 import psycopg2
 conn = psycopg2.connect(
     host="$POSTGRES_SERVICE.$POSTGRES_NAMESPACE.svc.cluster.local",
