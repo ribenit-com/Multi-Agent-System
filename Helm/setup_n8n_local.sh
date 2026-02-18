@@ -25,18 +25,22 @@ kubectl get pv -o name | grep n8n-pv- | xargs -r kubectl delete --ignore-not-fou
 
 # ---------- Step 0.5: 检查 containerd 镜像 ----------
 echo "[INFO] Step 0.5: 检查 containerd 镜像或导入离线 tar"
-if sudo ctr -n k8s.io images ls | grep -q "${N8N_IMAGE}"; then
-  echo "[INFO] containerd 上已存在镜像: $N8N_IMAGE"
-else
+if ! sudo ctr -n k8s.io images ls | grep -q "${N8N_IMAGE}"; then
   if [ -f "$TAR_FILE" ]; then
     echo "[WARN] containerd 上没有 $N8N_IMAGE 镜像，检测到本地 tar 文件，开始导入..."
+    # 修复 tar 文件权限
+    sudo chown $(whoami):$(whoami) "$TAR_FILE"
+    chmod 644 "$TAR_FILE"
     echo "[INFO] 导入中，请耐心等待..."
-    sudo ctr -n k8s.io image import "$TAR_FILE" | stdbuf -oL awk '{printf("\r%s", $0)}'
-    echo -e "\n[INFO] 镜像导入完成: $N8N_IMAGE"
+    sudo ctr -n k8s.io image import "$TAR_FILE" | pv -p -t -e -r > /dev/null
+    echo "[INFO] 镜像导入完成: $N8N_IMAGE"
   else
-    echo "[ERROR] containerd 上没有镜像，也找不到本地 tar 文件 ($TAR_FILE)！"
+    echo "[ERROR] containerd 上没有 $N8N_IMAGE 镜像，且未检测到本地 tar 文件: $TAR_FILE"
+    echo "请先准备 tar 文件或联网拉取镜像: sudo ctr -n k8s.io image pull $N8N_IMAGE"
     exit 1
   fi
+else
+  echo "[INFO] containerd 上已存在镜像: $N8N_IMAGE"
 fi
 
 # ---------- Step 1: 检测 StorageClass ----------
@@ -173,7 +177,7 @@ EOF
   done
 fi
 
-# ---------- Step 4: 使用 Helm 安装/升级 n8n HA ----------
+# ---------- Step 4: 使用 Helm 安装 n8n HA ----------
 echo "[INFO] Step 4: 使用 Helm 安装/升级 n8n HA"
 if helm status n8n-ha -n $NAMESPACE >/dev/null 2>&1; then
   echo "[INFO] Release 已存在，升级 Helm Chart..."
@@ -184,14 +188,18 @@ else
 fi
 
 # ---------- Step 4a: 等待 StatefulSet ----------
-echo "[INFO] Step 4a: 等待 StatefulSet 就绪"
+echo "[INFO] 等待 n8n StatefulSet 就绪..."
 for i in {1..60}; do
-  READY=$(kubectl -n $NAMESPACE get sts n8n -o jsonpath='{.status.readyReplicas}' || echo "0")
-  DESIRED=$(kubectl -n $NAMESPACE get sts n8n -o jsonpath='{.spec.replicas}' || echo "2")
-  echo "[INFO] [$i] StatefulSet n8n: $READY/$DESIRED 就绪"
-  if [ "$READY" == "$DESIRED" ]; then
-    echo "[INFO] ✅ StatefulSet 已就绪"
-    break
+  if kubectl -n $NAMESPACE get sts n8n >/dev/null 2>&1; then
+    READY=$(kubectl -n $NAMESPACE get sts n8n -o jsonpath='{.status.readyReplicas}' || echo "0")
+    DESIRED=$(kubectl -n $NAMESPACE get sts n8n -o jsonpath='{.spec.replicas}' || echo "2")
+    echo "[INFO][$i] StatefulSet n8n: $READY/$DESIRED 就绪"
+    if [ "$READY" == "$DESIRED" ]; then
+      echo "[INFO] ✅ StatefulSet 已就绪"
+      break
+    fi
+  else
+    echo "[INFO][$i] StatefulSet n8n 尚未创建，等待 5s..."
   fi
   sleep 5
 done
