@@ -1,0 +1,355 @@
+#!/bin/bash
+set -Eeuo pipefail
+
+# ===================================================
+# n8n HA 企业级一键部署 + HTML 交付页面
+# 支持 Pod 状态可视化 + PostgreSQL 初始化
+# 功能总结：
+# 1. 自动清理冲突 PVC/PV（非阻塞）
+# 2. 自动生成 Helm Chart + 手动 PV（如无 StorageClass）
+# 3. 自动创建 ArgoCD Application
+# 4. 等待 StatefulSet 就绪
+# 5. 测试 PostgreSQL 连通性并初始化数据库
+# 6. 生成企业交付 HTML 页面
+# ===================================================
+
+# ---------- 配置 ----------
+CHART_DIR="$HOME/gitops/n8n-ha-chart"
+NAMESPACE="automation"
+ARGO_APP="n8n-ha"
+GITHUB_REPO="ribenit-com/Multi-Agent-k8s-gitops-n8n"
+PVC_SIZE="10Gi"
+APP_LABEL="n8n"
+LOG_DIR="/mnt/truenas"
+HTML_FILE="${LOG_DIR}/n8n_ha_info.html"
+
+POSTGRES_SERVICE="postgres"
+POSTGRES_NAMESPACE="database"
+POSTGRES_USER="myuser"
+POSTGRES_PASSWORD="mypassword"
+POSTGRES_DB_PREFIX="n8n"
+
+mkdir -p "$CHART_DIR/templates" "$LOG_DIR"
+
+# ---------- Step 0: 清理已有 PVC/PV（非阻塞） ----------
+echo "=== Step 0: 清理已有 PVC/PV ==="
+kubectl delete pvc -n $NAMESPACE -l app=$APP_LABEL --ignore-not-found --wait=false || true
+kubectl get pv -o name | grep n8n-pv- | xargs -r kubectl delete --ignore-not-found --wait=false || true
+
+# ---------- Step 1: 检测 StorageClass ----------
+echo "=== Step 1: 检测 StorageClass ==="
+SC_NAME=$(kubectl get storageclass -o jsonpath='{.items[0].metadata.name}' || true)
+if [ -z "$SC_NAME" ]; then
+  echo "⚠️ 集群没有 StorageClass，将使用手动 PV"
+else
+  echo "✅ 检测到 StorageClass: $SC_NAME"
+fi
+
+# ---------- Step 2: 创建 Helm Chart ----------
+echo "=== Step 2: 创建 Helm Chart ==="
+
+cat > "$CHART_DIR/Chart.yaml" <<EOF
+apiVersion: v2
+name: n8n-ha-chart
+description: "n8n Helm Chart for HA production"
+type: application
+version: 1.0.0
+appVersion: "2.224.1"
+EOF
+
+cat > "$CHART_DIR/values.yaml" <<EOF
+replicaCount: 2
+image:
+  registry: n8nio
+  repository: n8n
+  tag: "2.224.1"
+  pullPolicy: IfNotPresent
+
+persistence:
+  enabled: true
+  size: $PVC_SIZE
+  storageClass: ${SC_NAME:-""}
+
+resources:
+  requests:
+    memory: 512Mi
+    cpu: 250m
+  limits:
+    memory: 1Gi
+    cpu: 500m
+
+postgres:
+  host: $POSTGRES_SERVICE.$POSTGRES_NAMESPACE.svc.cluster.local
+  user: $POSTGRES_USER
+  password: $POSTGRES_PASSWORD
+  dbPrefix: $POSTGRES_DB_PREFIX
+EOF
+
+cat > "$CHART_DIR/templates/statefulset.yaml" <<'EOF'
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: n8n
+  labels:
+    app: n8n
+spec:
+  serviceName: n8n-headless
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: n8n
+  template:
+    metadata:
+      labels:
+        app: n8n
+    spec:
+      containers:
+        - name: n8n
+          image: "{{ .Values.image.registry }}/{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: DB_TYPE
+              value: postgresdb
+            - name: DB_POSTGRESDB_HOST
+              value: "{{ .Values.postgres.host }}"
+            - name: DB_POSTGRESDB_DATABASE
+              value: "{{ .Values.postgres.dbPrefix }}"
+            - name: DB_POSTGRESDB_USER
+              value: "{{ .Values.postgres.user }}"
+            - name: DB_POSTGRESDB_PASSWORD
+              value: "{{ .Values.postgres.password }}"
+          ports:
+            - containerPort: 5678
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass }}
+        {{- end }}
+EOF
+
+cat > "$CHART_DIR/templates/service.yaml" <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: n8n
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5678
+      targetPort: 5678
+      name: n8n
+  selector:
+    app: n8n
+EOF
+
+cat > "$CHART_DIR/templates/headless-service.yaml" <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: n8n-headless
+spec:
+  clusterIP: None
+  ports:
+    - port: 5678
+      targetPort: 5678
+  selector:
+    app: n8n
+EOF
+
+# ---------- Step 3: 手动 PV (如无 StorageClass) ----------
+if [ -z "$SC_NAME" ]; then
+  echo "=== Step 3: 创建手动 PV ==="
+  for i in $(seq 0 1); do
+    PV_NAME="n8n-pv-$i"
+    mkdir -p /mnt/data/n8n-$i
+    cat > /tmp/$PV_NAME.yaml <<EOF
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: $PV_NAME
+spec:
+  capacity:
+    storage: $PVC_SIZE
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: /mnt/data/n8n-$i
+  persistentVolumeReclaimPolicy: Retain
+EOF
+    kubectl apply -f /tmp/$PV_NAME.yaml
+  done
+fi
+
+# ---------- Step 4: 应用 ArgoCD Application ----------
+echo "=== Step 4: 应用 n8n ArgoCD Application ==="
+kubectl apply -f - <<EOF
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: $ARGO_APP
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: 'https://github.com/$GITHUB_REPO.git'
+    targetRevision: main
+    path: n8n-ha-chart
+    helm:
+      valueFiles:
+        - values.yaml
+  destination:
+    server: 'https://kubernetes.default.svc'
+    namespace: $NAMESPACE
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+EOF
+
+# ---------- Step 4a: 等待 StatefulSet ----------
+echo "等待 n8n StatefulSet 就绪..."
+for i in {1..60}; do
+  if kubectl -n $NAMESPACE get sts n8n >/dev/null 2>&1; then
+    kubectl -n $NAMESPACE rollout status sts/n8n --timeout=300s && break
+  else
+    echo "[$i] StatefulSet n8n 尚未创建，等待 5s..."
+    sleep 5
+  fi
+done
+
+# ---------- Step 4b: 测试数据库连通性并初始化 ----------
+echo "=== Step 4b: 测试 PostgreSQL 连通性并初始化数据库 ==="
+DB_HOST=$(kubectl -n $POSTGRES_NAMESPACE get svc $POSTGRES_SERVICE -o jsonpath='{.spec.clusterIP}')
+DB_NAME="${POSTGRES_DB_PREFIX}_$(date +%s)"
+DB_INIT_STATUS="未执行"
+DB_ERROR=""
+
+for i in {1..12}; do
+  echo "尝试连接 PostgreSQL ($DB_HOST)... [$i/12]"
+  PGPASSWORD=$POSTGRES_PASSWORD psql -h $DB_HOST -U $POSTGRES_USER -d postgres -c "\q" >/dev/null 2>&1 && break
+  sleep 5
+  if [ $i -eq 12 ]; then
+    DB_ERROR="⚠️ 无法连接 PostgreSQL 服务 $DB_HOST"
+    echo $DB_ERROR
+  fi
+done
+
+if [ -z "$DB_ERROR" ]; then
+  echo "✅ PostgreSQL 可连接，开始初始化数据库 $DB_NAME"
+  INIT_SQL="CREATE DATABASE $DB_NAME;"
+  if PGPASSWORD=$POSTGRES_PASSWORD psql -h $DB_HOST -U $POSTGRES_USER -d postgres -c "$INIT_SQL"; then
+    DB_INIT_STATUS="✅ 数据库 $DB_NAME 初始化成功"
+  else
+    DB_INIT_STATUS="❌ 数据库 $DB_NAME 初始化失败"
+    DB_ERROR="初始化数据库失败，请检查用户权限或网络"
+  fi
+fi
+
+# ---------- Step 5: 生成企业交付 HTML ----------
+echo "=== Step 5: 生成 HTML 页面 ==="
+SERVICE_IP=$(kubectl -n $NAMESPACE get svc n8n -o jsonpath='{.spec.clusterIP}' || echo "127.0.0.1")
+PVC_LIST=$(kubectl -n $NAMESPACE get pvc -l app=$APP_LABEL -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
+REPLICA_COUNT=$(kubectl -n $NAMESPACE get sts n8n -o jsonpath='{.spec.replicas}' || echo "2")
+POSTGRES_CLUSTER_IP=$DB_HOST
+
+POD_STATUS=$(kubectl -n $NAMESPACE get pods -l app=$APP_LABEL -o custom-columns=NAME:.metadata.name,STATUS:.status.phase --no-headers || true)
+
+cat > "$HTML_FILE" <<EOF
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>n8n HA 企业交付指南</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body {margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f5f7fa}
+.container {display:flex;justify-content:center;align-items:flex-start;padding:30px}
+.card {background:#fff;padding:30px 40px;border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.08);width:650px}
+h2 {color:#1677ff;margin-bottom:20px;text-align:center}
+h3 {color:#444;margin-top:25px;margin-bottom:10px;border-bottom:1px solid #eee;padding-bottom:5px}
+pre {background:#f0f2f5;padding:12px;border-radius:6px;overflow-x:auto;font-family:monospace}
+.info {margin-bottom:10px}
+.label {font-weight:600;color:#333}
+.value {color:#555;margin-left:5px}
+.status-running {color:green;font-weight:600}
+.status-pending {color:orange;font-weight:600}
+.status-failed {color:red;font-weight:600}
+.footer {margin-top:20px;font-size:12px;color:#888;text-align:center}
+</style>
+</head>
+<body>
+<div class="container">
+<div class="card">
+<h2>🎉 n8n HA 安装完成</h2>
+
+<h3>数据库信息</h3>
+<div class="info"><span class="label">Namespace:</span><span class="value">$POSTGRES_NAMESPACE</span></div>
+<div class="info"><span class="label">Service:</span><span class="value">$POSTGRES_SERVICE</span></div>
+<div class="info"><span class="label">ClusterIP:</span><span class="value">$POSTGRES_CLUSTER_IP</span></div>
+<div class="info"><span class="label">用户名:</span><span class="value">$POSTGRES_USER</span></div>
+<div class="info"><span class="label">密码:</span><span class="value">$POSTGRES_PASSWORD</span></div>
+<div class="info"><span class="label">数据库名称:</span><span class="value">$DB_NAME</span></div>
+<div class="info"><span class="label">初始化状态:</span><span class="value">$DB_INIT_STATUS</span></div>
+<div class="info"><span class="label">错误信息:</span><span class="value">$DB_ERROR</span></div>
+<div class="info"><span class="label">副本数:</span><span class="value">$REPLICA_COUNT</span></div>
+
+<h3>PVC 列表</h3>
+<pre>$PVC_LIST</pre>
+
+<h3>Pod 状态</h3>
+<pre>
+EOF
+
+while read -r line; do
+  POD_NAME=$(echo $line | awk '{print $1}')
+  STATUS=$(echo $line | awk '{print $2}')
+  CASE_CLASS="status-failed"
+  [[ "$STATUS" == "Running" ]] && CASE_CLASS="status-running"
+  [[ "$STATUS" == "Pending" ]] && CASE_CLASS="status-pending"
+  echo "<div class=\"$CASE_CLASS\">$POD_NAME : $STATUS</div>" >> "$HTML_FILE"
+done <<< "$POD_STATUS"
+
+cat >> "$HTML_FILE" <<EOF
+</pre>
+
+<h3>访问方式</h3>
+<pre>
+kubectl -n $NAMESPACE port-forward svc/n8n 5678:5678
+访问 http://localhost:5678
+</pre>
+
+<h3>Python 示例</h3>
+<pre>
+import psycopg2
+conn = psycopg2.connect(
+    host="$POSTGRES_CLUSTER_IP",
+    database="$DB_NAME",
+    user="$POSTGRES_USER",
+    password="$POSTGRES_PASSWORD"
+)
+cur = conn.cursor()
+cur.execute("SELECT version();")
+print(cur.fetchone())
+</pre>
+
+<div class="footer">
+生成时间: $(date '+%Y-%m-%d %H:%M:%S')
+</div>
+
+</div>
+</div>
+</body>
+</html>
+EOF
+
+echo "✅ n8n HA 企业交付 HTML 页面已生成: $HTML_FILE"
