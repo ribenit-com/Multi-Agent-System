@@ -128,13 +128,26 @@ spec:
   storageClassName: {{ .Values.persistence.storageClass }}
 EOF
 
-# -------------------- 2️⃣ 初始化 Git 仓库 --------------------
-git init
-git checkout -b $GIT_BRANCH
-git add $CHART_DIR
-git commit -m "Add PostgreSQL 16.3 Helm chart"
+# -------------------- 2️⃣ 初始化或清理 Git 仓库 --------------------
+if [ -d ".git" ]; then
+  echo "⚡ 已存在 Git 仓库，清理 main 分支"
+  git checkout --orphan temp-clean
+  git add .
+  git commit -m "Clean main commit"
+  git branch -D $GIT_BRANCH
+  git branch -m $GIT_BRANCH
+else
+  echo "⚡ 初始化 Git 仓库"
+  git init
+  git checkout -b $GIT_BRANCH
+  git add $CHART_DIR
+  git commit -m "Add PostgreSQL Helm chart"
+fi
+
+# 关联远程并强制 push
+git remote remove origin 2>/dev/null || true
 git remote add origin $GIT_REPO
-git push -u origin $GIT_BRANCH
+git push -f origin $GIT_BRANCH
 
 # -------------------- 3️⃣ 创建 Namespace 和 ArgoCD Application --------------------
 kubectl apply -f - <<EOF
@@ -168,4 +181,7 @@ spec:
       - CreateNamespace=true
 EOF
 
-echo "✅ Helm chart 已生成并 push，Namespace 和 ArgoCD Application 已创建！"
+# -------------------- 4️⃣ 刷新 ArgoCD 缓存 --------------------
+argocd app sync postgres-official --refresh || true
+
+echo "✅ PostgreSQL Helm chart 已生成、Git 已推送，Namespace 和 ArgoCD Application 已创建并刷新缓存！"
