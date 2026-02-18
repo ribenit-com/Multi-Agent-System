@@ -1,99 +1,54 @@
 #!/bin/bash
-set -euo pipefail
 
-# ==========================================
-# ArgoCD 企业级自动安装脚本
-# ==========================================
+set -e
 
+# ===============================
+# 参数处理
+# ===============================
 HTTP_PORT=${1:-30099}
 HTTPS_PORT=${2:-30100}
-ARGOCD_NAMESPACE="argocd"
-HELM_VERSION="v3.14.4"
+
+VERSION="Enterprise v1.0.0"
+DEPLOY_TIME=$(date '+%Y-%m-%d %H:%M:%S')
+SERVER_IP=$(hostname -I | awk '{print $1}')
+
 LOG_DIR="/mnt/truenas"
+SUCCESS_PAGE="${LOG_DIR}/argocd_success.html"
 
-TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-LOG_FILE="${LOG_DIR}/argocd_install_${TIMESTAMP}.html"
+echo "======================================"
+echo " ArgoCD Enterprise 自动安装脚本"
+echo " HTTP Port : ${HTTP_PORT}"
+echo " HTTPS Port: ${HTTPS_PORT}"
+echo "======================================"
 
-mkdir -p "${LOG_DIR}" || true
-
-# 初始化 HTML 日志
-echo "<html><head><title>ArgoCD Install Log</title></head><body>" > "${LOG_FILE}"
-
-log() {
-    MSG="[$(date '+%Y-%m-%d %H:%M:%S')] $1"
-    echo "$MSG"
-    echo "<p>$MSG</p>" >> "${LOG_FILE}"
-}
-
-error_exit() {
-    log "❌ ERROR: $1"
-    echo "</body></html>" >> "${LOG_FILE}"
-    exit 1
-}
-
-log "🚀 开始部署 ArgoCD"
-
-# ==========================================
-# 1️⃣ 端口校验
-# ==========================================
-for PORT in $HTTP_PORT $HTTPS_PORT; do
-    if [ "$PORT" -lt 30000 ] || [ "$PORT" -gt 32767 ]; then
-        error_exit "端口必须在 30000-32767 之间"
-    fi
-done
-
-# ==========================================
-# 2️⃣ 检查 Kubernetes
-# ==========================================
-if ! kubectl cluster-info >/dev/null 2>&1; then
-    error_exit "Kubernetes 未运行"
-fi
-log "✅ Kubernetes 正常"
-
-# ==========================================
-# 3️⃣ 检查 Helm
-# ==========================================
+# ===============================
+# 检测 Helm
+# ===============================
 if ! command -v helm >/dev/null 2>&1; then
-    log "Helm 不存在，开始安装 ${HELM_VERSION}"
-
-    TMP_DIR=$(mktemp -d)
-    curl -sSL https://get.helm.sh/helm-${HELM_VERSION}-linux-amd64.tar.gz -o ${TMP_DIR}/helm.tar.gz
-    tar -xzf ${TMP_DIR}/helm.tar.gz -C ${TMP_DIR}
-    mv ${TMP_DIR}/linux-amd64/helm /usr/local/bin/helm
-    chmod +x /usr/local/bin/helm
-    rm -rf ${TMP_DIR}
-
-    log "✅ Helm 安装完成"
-else
-    log "✅ Helm 已存在"
+  echo "Helm 未安装，请先安装 Helm"
+  exit 1
 fi
 
-# ==========================================
-# 4️⃣ Helm repo 检测
-# ==========================================
+# ===============================
+# 添加 Argo Helm Repo
+# ===============================
 if ! helm repo list | grep -q "^argo"; then
-    log "添加 argo Helm 仓库"
-    helm repo add argo https://argoproj.github.io/argo-helm
-else
-    log "argo repo 已存在"
+  echo "添加 argo Helm 仓库..."
+  helm repo add argo https://argoproj.github.io/argo-helm
 fi
 
-helm repo update >/dev/null 2>&1
-log "Helm repo 更新完成"
+helm repo update
 
-# ==========================================
-# 5️⃣ Namespace 检测
-# ==========================================
-if ! kubectl get ns ${ARGOCD_NAMESPACE} >/dev/null 2>&1; then
-    kubectl create ns ${ARGOCD_NAMESPACE}
-    log "创建 namespace ${ARGOCD_NAMESPACE}"
-else
-    log "namespace 已存在"
+# ===============================
+# 创建 Namespace
+# ===============================
+if ! kubectl get ns argocd >/dev/null 2>&1; then
+  kubectl create ns argocd
 fi
 
-# ==========================================
-# 6️⃣ 生成 values.yaml
-# ==========================================
+# ===============================
+# 生成 values 文件
+# ===============================
 cat <<EOF > /tmp/argocd-values.yaml
 server:
   service:
@@ -102,67 +57,173 @@ server:
     nodePortHttps: ${HTTPS_PORT}
 EOF
 
-log "已生成 NodePort 配置"
-
-# ==========================================
-# 7️⃣ 安装 / 升级 ArgoCD
-# ==========================================
-if helm -n ${ARGOCD_NAMESPACE} status argocd >/dev/null 2>&1; then
-    log "ArgoCD 已存在，执行 upgrade"
-else
-    log "ArgoCD 未安装，执行 install"
-fi
-
+# ===============================
+# 安装 / 升级 ArgoCD
+# ===============================
 helm upgrade --install argocd argo/argo-cd \
-  -n ${ARGOCD_NAMESPACE} \
+  -n argocd \
   -f /tmp/argocd-values.yaml
 
-log "等待 ArgoCD Server 启动..."
-kubectl -n ${ARGOCD_NAMESPACE} rollout status deploy/argocd-server --timeout=300s
+# ===============================
+# 等待 Pod 就绪
+# ===============================
+echo "等待 ArgoCD Server 启动..."
+kubectl rollout status deployment argocd-server -n argocd --timeout=180s
 
-log "✅ ArgoCD 已启动"
+# ===============================
+# 获取初始密码
+# ===============================
+ARGOCD_PASSWORD=$(kubectl -n argocd get secret argocd-initial-admin-secret \
+  -o jsonpath="{.data.password}" | base64 -d)
 
-# ==========================================
-# 8️⃣ 防火墙开放
-# ==========================================
-log "检查防火墙"
+echo "获取到初始密码"
 
+# ===============================
+# 开放防火墙（如果存在）
+# ===============================
 if command -v ufw >/dev/null 2>&1; then
-    ufw allow ${HTTP_PORT}/tcp || true
-    ufw allow ${HTTPS_PORT}/tcp || true
-    ufw reload || true
-    log "ufw 已放行端口"
+  ufw allow ${HTTPS_PORT}/tcp || true
 fi
 
 if command -v firewall-cmd >/dev/null 2>&1; then
-    firewall-cmd --permanent --add-port=${HTTP_PORT}/tcp || true
-    firewall-cmd --permanent --add-port=${HTTPS_PORT}/tcp || true
-    firewall-cmd --reload || true
-    log "firewalld 已放行端口"
+  firewall-cmd --permanent --add-port=${HTTPS_PORT}/tcp || true
+  firewall-cmd --reload || true
 fi
 
-# ==========================================
-# 9️⃣ 输出访问信息
-# ==========================================
-NODE_IP=$(hostname -I | awk '{print $1}')
+# ===============================
+# 生成企业成功页面
+# ===============================
+mkdir -p "${LOG_DIR}" || true
 
-ADMIN_PASSWORD=$(kubectl -n ${ARGOCD_NAMESPACE} \
-  get secret argocd-initial-admin-secret \
-  -o jsonpath="{.data.password}" | base64 -d)
+cat > "${SUCCESS_PAGE}" <<EOF
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>ArgoCD 部署成功</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body {
+    margin:0;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial;
+    background:#f5f7fa;
+}
+.container {
+    height:100vh;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+}
+.card {
+    background:#ffffff;
+    padding:40px;
+    border-radius:14px;
+    box-shadow:0 12px 32px rgba(0,0,0,0.08);
+    width:460px;
+    text-align:center;
+}
+.success-icon {
+    font-size:64px;
+    color:#52c41a;
+    margin-bottom:20px;
+}
+.title {
+    font-size:22px;
+    font-weight:600;
+    margin-bottom:10px;
+}
+.subtitle {
+    font-size:14px;
+    color:#888;
+    margin-bottom:25px;
+}
+.section {
+    text-align:left;
+}
+.label {
+    font-weight:600;
+    color:#444;
+    margin-top:10px;
+}
+.value {
+    background:#f0f2f5;
+    padding:10px;
+    border-radius:6px;
+    margin-top:5px;
+    font-family:monospace;
+    word-break:break-all;
+}
+.button {
+    display:inline-block;
+    margin-top:25px;
+    padding:10px 22px;
+    background:#1677ff;
+    color:#fff;
+    border-radius:6px;
+    text-decoration:none;
+    font-weight:500;
+}
+.button:hover {
+    background:#4096ff;
+}
+.note {
+    margin-top:25px;
+    font-size:13px;
+    color:#777;
+    line-height:1.6;
+}
+.footer {
+    margin-top:20px;
+    font-size:12px;
+    color:#aaa;
+}
+</style>
+</head>
 
-log "🎉 部署完成"
-log "访问地址: https://${NODE_IP}:${HTTPS_PORT}"
-log "用户名: admin"
-log "密码: ${ADMIN_PASSWORD}"
+<body>
+<div class="container">
+  <div class="card">
+    <div class="success-icon">✔</div>
 
-echo "</body></html>" >> "${LOG_FILE}"
+    <div class="title">ArgoCD 应用引擎部署成功</div>
+    <div class="subtitle">系统已成功安装并运行</div>
 
-echo
-echo "============================================"
-echo "🎉 ArgoCD 部署完成"
-echo "访问地址: https://${NODE_IP}:${HTTPS_PORT}"
-echo "用户名: admin"
-echo "密码: ${ADMIN_PASSWORD}"
-echo "HTML 日志: ${LOG_FILE}"
-echo "============================================"
-echo
+    <div class="section">
+      <div class="label">登录地址</div>
+      <div class="value">https://${SERVER_IP}:${HTTPS_PORT}</div>
+
+      <div class="label">用户名</div>
+      <div class="value">admin</div>
+
+      <div class="label">初始密码</div>
+      <div class="value">${ARGOCD_PASSWORD}</div>
+    </div>
+
+    <a class="button" href="https://${SERVER_IP}:${HTTPS_PORT}" target="_blank">
+      立即访问控制台
+    </a>
+
+    <div class="note">
+      ⚠ 首次登录后请立即修改密码<br>
+      ⚠ 若无法访问，请检查防火墙端口是否开放<br>
+      ⚠ 浏览器提示 HTTPS 安全警告属于正常现象
+    </div>
+
+    <div class="footer">
+      版本：${VERSION}<br>
+      部署时间：${DEPLOY_TIME}
+    </div>
+
+  </div>
+</div>
+</body>
+</html>
+EOF
+
+echo "======================================"
+echo " 部署完成！"
+echo " 访问地址: https://${SERVER_IP}:${HTTPS_PORT}"
+echo " 用户名: admin"
+echo " 密码: ${ARGOCD_PASSWORD}"
+echo " 成功页面: ${SUCCESS_PAGE}"
+echo "======================================"
