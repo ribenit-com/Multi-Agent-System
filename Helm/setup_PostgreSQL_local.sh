@@ -4,6 +4,15 @@ set -Eeuo pipefail
 # ===================================================
 # PostgreSQL HA 企业级一键部署 + HTML 交付页面
 # 支持 Pod 状态可视化
+#  功能总结：
+# 自动清理冲突 PVC/PV
+# 自动生成 Helm Chart + 手动 PV（如无 StorageClass）
+# 自动创建 ArgoCD Application
+# 自动轮询 ArgoCD Application 状态，确保 StatefulSet 部署成功
+# 等待 StatefulSet 就绪
+# 生成企业交付 HTML 页面
+# 显示每个 Pod 状态：Running（绿色）、Pending（橙色）、Failed/CrashLoop（红色）
+# 页面内显示 PVC、访问方式、Python/Java 示例代码
 # ===================================================
 
 # ---------- 配置 ----------
