@@ -70,3 +70,6 @@ curl -fsSL https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main
 -o install_argocd_enterprise.sh \
 && chmod +x install_argocd_enterprise.sh \
 && sudo ./install_argocd_enterprise.sh 30099 30100
+
+./install_argocd_enterprise.sh <HTTP_PORT> <HTTPS_PORT>
+
