@@ -4,27 +4,24 @@ set -Eeuo pipefail
 # ===================================================
 # Redis HA 企业级一键部署 + HTML 交付页面
 # 支持 Pod 状态可视化
-#  功能总结：
-# 自动清理冲突 PVC/PV
-# 自动生成 Helm Chart + 手动 PV（如无 StorageClass）
-# 自动创建 ArgoCD Application
-# 等待 StatefulSet 就绪
-# 生成企业交付 HTML 页面
-# 显示每个 Pod 状态：Running（绿色）、Pending（橙色）、Failed/CrashLoop（红色）
-# 页面内显示 PVC、访问方式、Python/Java 示例代码
+# 功能：
+# - 自动清理冲突 PVC/PV
+# - 自动创建 StatefulSet + Service
+# - 等待 StatefulSet 就绪
+# - 生成企业交付 HTML 页面
 # ===================================================
 
 # ---------- 配置 ----------
 CHART_DIR="$HOME/gitops/redis-ha-chart"
 NAMESPACE="database"
-ARGO_APP="redis-ha"
-GITHUB_REPO="ribenit-com/Multi-Agent-k8s-gitops-postgres"
-PVC_SIZE="10Gi"
 APP_LABEL="redis"
+PVC_SIZE="5Gi"
+REPLICA_COUNT=2
 LOG_DIR="/mnt/truenas"
 HTML_FILE="${LOG_DIR}/redis_ha_info.html"
+IMAGE="redis:7.2.2"
 
-mkdir -p "$CHART_DIR/templates" "$LOG_DIR"
+mkdir -p "$CHART_DIR" "$LOG_DIR"
 
 # ---------- Step 0: 清理已有 PVC/PV ----------
 echo "=== Step 0: 清理已有 PVC/PV ==="
@@ -40,127 +37,10 @@ else
   echo "✅ 检测到 StorageClass: $SC_NAME"
 fi
 
-# ---------- Step 2: 创建 Helm Chart ----------
-echo "=== Step 2: 创建 Helm Chart ==="
-
-# Chart.yaml
-cat > "$CHART_DIR/Chart.yaml" <<EOF
-apiVersion: v2
-name: redis-ha-chart
-description: "Official Redis Helm Chart for HA production"
-type: application
-version: 1.0.0
-appVersion: "8.2"
-EOF
-
-# values.yaml
-cat > "$CHART_DIR/values.yaml" <<EOF
-replicaCount: 2
-
-image:
-  registry: docker.m.daocloud.io
-  repository: library/redis
-  tag: "8.2"
-  pullPolicy: IfNotPresent
-
-redis:
-  password: myredispassword
-
-persistence:
-  enabled: true
-  size: $PVC_SIZE
-  storageClass: ${SC_NAME:-""}
-
-resources:
-  requests:
-    memory: 512Mi
-    cpu: 250m
-  limits:
-    memory: 1Gi
-    cpu: 500m
-EOF
-
-# templates/statefulset.yaml
-cat > "$CHART_DIR/templates/statefulset.yaml" <<'EOF'
-apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-  name: redis
-  labels:
-    app: redis
-spec:
-  serviceName: redis-headless
-  replicas: {{ .Values.replicaCount }}
-  selector:
-    matchLabels:
-      app: redis
-  template:
-    metadata:
-      labels:
-        app: redis
-    spec:
-      containers:
-        - name: redis
-          image: "{{ .Values.image.registry }}/{{ .Values.image.repository }}:{{ .Values.image.tag }}"
-          imagePullPolicy: {{ .Values.image.pullPolicy }}
-          env:
-            - name: REDIS_PASSWORD
-              value: {{ .Values.redis.password | quote }}
-          ports:
-            - containerPort: 6379
-          volumeMounts:
-            - name: data
-              mountPath: /data
-          resources:
-            {{- toYaml .Values.resources | nindent 12 }}
-  volumeClaimTemplates:
-    - metadata:
-        name: data
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        resources:
-          requests:
-            storage: {{ .Values.persistence.size }}
-        {{- if .Values.persistence.storageClass }}
-        storageClassName: {{ .Values.persistence.storageClass }}
-        {{- end }}
-EOF
-
-# templates/service.yaml
-cat > "$CHART_DIR/templates/service.yaml" <<EOF
-apiVersion: v1
-kind: Service
-metadata:
-  name: redis
-spec:
-  type: ClusterIP
-  ports:
-    - port: 6379
-      targetPort: 6379
-      name: redis
-  selector:
-    app: redis
-EOF
-
-# templates/headless-service.yaml
-cat > "$CHART_DIR/templates/headless-service.yaml" <<EOF
-apiVersion: v1
-kind: Service
-metadata:
-  name: redis-headless
-spec:
-  clusterIP: None
-  ports:
-    - port: 6379
-      targetPort: 6379
-  selector:
-    app: redis
-EOF
-
-# ---------- Step 3: 手动 PV (如无 StorageClass) ----------
+# ---------- Step 2: 创建手动 PV (如无 StorageClass) ----------
 if [ -z "$SC_NAME" ]; then
-  echo "=== Step 3: 创建手动 PV ==="
-  for i in $(seq 0 1); do
+  echo "=== Step 2: 创建手动 PV ==="
+  for i in $(seq 0 $((REPLICA_COUNT-1))); do
     PV_NAME="redis-pv-$i"
     mkdir -p /mnt/data/redis-$i
     cat > /tmp/$PV_NAME.yaml <<EOF
@@ -181,53 +61,91 @@ EOF
   done
 fi
 
-# ---------- Step 4: 应用 ArgoCD Application ----------
-echo "=== Step 4: 应用 Redis ArgoCD Application ==="
-kubectl apply -f - <<EOF
-apiVersion: argoproj.io/v1alpha1
-kind: Application
+# ---------- Step 3: 创建 Namespace ----------
+kubectl get ns $NAMESPACE >/dev/null 2>&1 || kubectl create ns $NAMESPACE
+
+# ---------- Step 4: 创建 Headless Service ----------
+cat > /tmp/redis-headless.yaml <<EOF
+apiVersion: v1
+kind: Service
 metadata:
-  name: $ARGO_APP
-  namespace: argocd
+  name: redis-headless
+  namespace: $NAMESPACE
 spec:
-  project: default
-  source:
-    repoURL: 'https://github.com/ribenit-com/Multi-Agent-k8s-gitops-postgres.git'
-    targetRevision: main
-    path: redis-ha-chart
-    helm:
-      valueFiles:
-        - values.yaml
-  destination:
-    server: 'https://kubernetes.default.svc'
-    namespace: $NAMESPACE
-  syncPolicy:
-    automated:
-      prune: true
-      selfHeal: true
-    syncOptions:
-      - CreateNamespace=true
+  clusterIP: None
+  ports:
+    - port: 6379
+      targetPort: 6379
+  selector:
+    app: $APP_LABEL
+EOF
+kubectl apply -f /tmp/redis-headless.yaml
+
+# ---------- Step 5: 创建 StatefulSet ----------
+cat > /tmp/redis-sts.yaml <<EOF
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: $APP_LABEL
+  namespace: $NAMESPACE
+spec:
+  serviceName: redis-headless
+  replicas: $REPLICA_COUNT
+  selector:
+    matchLabels:
+      app: $APP_LABEL
+  template:
+    metadata:
+      labels:
+        app: $APP_LABEL
+    spec:
+      containers:
+      - name: redis
+        image: $IMAGE
+        ports:
+        - containerPort: 6379
+        volumeMounts:
+        - name: data
+          mountPath: /data
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: $PVC_SIZE
+      $( [ -n "$SC_NAME" ] && echo "storageClassName: $SC_NAME" )
 EOF
 
-echo "✅ Redis ArgoCD Application 已创建"
+kubectl apply -f /tmp/redis-sts.yaml
 
-# ---------- Step 4b: 等待 StatefulSet ----------
-echo "检查 Redis StatefulSet..."
-if kubectl -n $NAMESPACE get sts $APP_LABEL >/dev/null 2>&1; then
-  echo "等待 Redis StatefulSet 就绪..."
-  kubectl -n $NAMESPACE rollout status sts/$APP_LABEL --timeout=300s
-else
-  echo "⚠ StatefulSet $APP_LABEL 不存在，直接跳过等待"
-fi
+# ---------- Step 6: 创建 ClusterIP Service ----------
+cat > /tmp/redis-svc.yaml <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: $APP_LABEL
+  namespace: $NAMESPACE
+spec:
+  type: ClusterIP
+  ports:
+    - port: 6379
+      targetPort: 6379
+  selector:
+    app: $APP_LABEL
+EOF
 
-# ---------- Step 5: 生成企业交付 HTML ----------
-echo "=== Step 5: 生成 HTML 页面 ==="
+kubectl apply -f /tmp/redis-svc.yaml
 
+# ---------- Step 7: 等待 StatefulSet 就绪 ----------
+echo "等待 Redis StatefulSet 就绪..."
+kubectl -n $NAMESPACE rollout status sts/$APP_LABEL --timeout=300s
+
+# ---------- Step 8: 生成企业交付 HTML ----------
+echo "=== Step 8: 生成 HTML 页面 ==="
 SERVICE_IP=$(kubectl -n $NAMESPACE get svc $APP_LABEL -o jsonpath='{.spec.clusterIP}' || echo "127.0.0.1")
 PVC_LIST=$(kubectl -n $NAMESPACE get pvc -l app=$APP_LABEL -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
-REDIS_PASSWORD="myredispassword"
-REPLICA_COUNT=$(kubectl -n $NAMESPACE get sts $APP_LABEL -o jsonpath='{.spec.replicas}' || echo "2")
-
 POD_STATUS=$(kubectl -n $NAMESPACE get pods -l app=$APP_LABEL -o custom-columns=NAME:.metadata.name,STATUS:.status.phase --no-headers)
 
 cat > "$HTML_FILE" <<EOF
@@ -263,7 +181,6 @@ pre {background:#f0f2f5;padding:12px;border-radius:6px;overflow-x:auto;font-fami
 <div class="info"><span class="label">Service:</span><span class="value">$APP_LABEL</span></div>
 <div class="info"><span class="label">ClusterIP:</span><span class="value">$SERVICE_IP</span></div>
 <div class="info"><span class="label">端口:</span><span class="value">6379</span></div>
-<div class="info"><span class="label">密码:</span><span class="value">$REDIS_PASSWORD</span></div>
 <div class="info"><span class="label">副本数:</span><span class="value">$REPLICA_COUNT</span></div>
 
 <h3>PVC 列表</h3>
@@ -288,23 +205,14 @@ cat >> "$HTML_FILE" <<EOF
 <h3>访问方式</h3>
 <pre>
 kubectl -n $NAMESPACE port-forward svc/$APP_LABEL 6379:6379
-redis-cli -h localhost -a $REDIS_PASSWORD
+redis-cli -h localhost -p 6379
 </pre>
 
 <h3>Python 示例</h3>
 <pre>
 import redis
-r = redis.Redis(host="$SERVICE_IP", port=6379, password="$REDIS_PASSWORD")
-r.set("test","hello")
-print(r.get("test"))
-</pre>
-
-<h3>Java 示例</h3>
-<pre>
-String url = "redis://:$REDIS_PASSWORD@$SERVICE_IP:6379";
-Jedis jedis = new Jedis(url);
-jedis.set("test","hello");
-System.out.println(jedis.get("test"));
+r = redis.Redis(host="$SERVICE_IP", port=6379)
+print(r.ping())
 </pre>
 
 <div class="footer">
