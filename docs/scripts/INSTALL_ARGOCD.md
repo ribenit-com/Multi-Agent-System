@@ -22,3 +22,51 @@
 
 脚本内部执行流程如下：
 
+参数校验
+↓
+检测 kubectl
+↓
+检测 Kubernetes
+↓
+检测 Helm（不存在则自动安装）
+↓
+添加 Helm Repo
+↓
+创建 Namespace
+↓
+生成 values.yaml
+↓
+helm upgrade --install
+↓
+等待 Pod 就绪
+↓
+获取初始密码
+↓
+开放防火墙端口
+↓
+生成成功页面
+
+
+
+---
+
+# ⚙️ 环境要求
+
+| 组件 | 要求 |
+|------|------|
+| 操作系统 | Linux (Ubuntu / CentOS / Debian) |
+| Kubernetes | 已安装并运行 |
+| kubectl | 已正确配置 |
+| 网络 | 可访问外网下载 Helm 和 Chart |
+
+---
+
+# 🚀 安装方式
+
+## 一键下载并执行
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/deploy/install_argocd_enterprise.sh \
+-o install_argocd_enterprise.sh \
+&& chmod +x install_argocd_enterprise.sh \
+&& sudo ./install_argocd_enterprise.sh 30099 30100
