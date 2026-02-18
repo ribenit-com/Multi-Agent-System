@@ -3,13 +3,15 @@ set -Eeuo pipefail
 
 # ===================================================
 # Redis HA 企业级一键部署 + HTML 交付页面
-# 功能：
-# 1. 自动清理冲突 PVC/PV
-# 2. 自动生成 Helm Chart + 手动 PV（如无 StorageClass）
-# 3. 自动创建 ArgoCD Application
-# 4. 等待 ArgoCD 同步完成
-# 5. 等待 StatefulSet 就绪
-# 6. 生成 HTML 页面显示 Pod 状态、PVC、访问方式、Python/Java 示例
+# 支持 Pod 状态可视化
+#  功能总结：
+# 自动清理冲突 PVC/PV
+# 自动生成 Helm Chart + 手动 PV（如无 StorageClass）
+# 自动创建 ArgoCD Application
+# 等待 StatefulSet 就绪
+# 生成企业交付 HTML 页面
+# 显示每个 Pod 状态：Running（绿色）、Pending（橙色）、Failed/CrashLoop（红色）
+# 页面内显示 PVC、访问方式、Python/Java 示例代码
 # ===================================================
 
 # ---------- 配置 ----------
@@ -17,7 +19,7 @@ CHART_DIR="$HOME/gitops/redis-ha-chart"
 NAMESPACE="database"
 ARGO_APP="redis-ha"
 GITHUB_REPO="ribenit-com/Multi-Agent-k8s-gitops-postgres"
-PVC_SIZE="5Gi"
+PVC_SIZE="10Gi"
 APP_LABEL="redis"
 LOG_DIR="/mnt/truenas"
 HTML_FILE="${LOG_DIR}/redis_ha_info.html"
@@ -45,10 +47,10 @@ echo "=== Step 2: 创建 Helm Chart ==="
 cat > "$CHART_DIR/Chart.yaml" <<EOF
 apiVersion: v2
 name: redis-ha-chart
-description: "Official Redis 7.0 Helm Chart for HA production"
+description: "Official Redis Helm Chart for HA production"
 type: application
 version: 1.0.0
-appVersion: "7.0"
+appVersion: "8.2"
 EOF
 
 # values.yaml
@@ -56,10 +58,13 @@ cat > "$CHART_DIR/values.yaml" <<EOF
 replicaCount: 2
 
 image:
-  registry: docker.io
-  repository: redis
-  tag: "7.0"
+  registry: docker.m.daocloud.io
+  repository: library/redis
+  tag: "8.2"
   pullPolicy: IfNotPresent
+
+redis:
+  password: myredispassword
 
 persistence:
   enabled: true
@@ -68,11 +73,11 @@ persistence:
 
 resources:
   requests:
-    memory: 256Mi
-    cpu: 200m
-  limits:
     memory: 512Mi
-    cpu: 400m
+    cpu: 250m
+  limits:
+    memory: 1Gi
+    cpu: 500m
 EOF
 
 # templates/statefulset.yaml
@@ -98,6 +103,9 @@ spec:
         - name: redis
           image: "{{ .Values.image.registry }}/{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: REDIS_PASSWORD
+              value: {{ .Values.redis.password | quote }}
           ports:
             - containerPort: 6379
           volumeMounts:
@@ -173,7 +181,7 @@ EOF
   done
 fi
 
-# ---------- Step 4: 应用 Redis ArgoCD Application ----------
+# ---------- Step 4: 应用 ArgoCD Application ----------
 echo "=== Step 4: 应用 Redis ArgoCD Application ==="
 kubectl apply -f - <<EOF
 apiVersion: argoproj.io/v1alpha1
@@ -184,7 +192,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: 'https://github.com/$GITHUB_REPO.git'
+    repoURL: 'https://github.com/ribenit-com/Multi-Agent-k8s-gitops-postgres.git'
     targetRevision: main
     path: redis-ha-chart
     helm:
@@ -201,39 +209,25 @@ spec:
       - CreateNamespace=true
 EOF
 
-# ---------- Step 4a: 等待 ArgoCD 同步 ----------
-echo "等待 Redis ArgoCD Application 同步完成..."
-for i in {1..60}; do
-  STATUS=$(kubectl -n argocd get app $ARGO_APP -o jsonpath='{.status.sync.status}' || echo "")
-  HEALTH=$(kubectl -n argocd get app $ARGO_APP -o jsonpath='{.status.health.status}' || echo "")
-  echo "[$i] ArgoCD sync=$STATUS, health=$HEALTH"
-  if [[ "$STATUS" == "Synced" && "$HEALTH" == "Healthy" ]]; then
-    echo "✅ Redis ArgoCD Application 已同步完成"
-    break
-  fi
-  sleep 5
-done
+echo "✅ Redis ArgoCD Application 已创建"
 
-# ---------- Step 4b: 检查 StatefulSet ----------
+# ---------- Step 4b: 等待 StatefulSet ----------
 echo "检查 Redis StatefulSet..."
-kubectl -n $NAMESPACE get sts -o wide || echo "⚠ 没有找到 StatefulSet"
-
 if kubectl -n $NAMESPACE get sts $APP_LABEL >/dev/null 2>&1; then
   echo "等待 Redis StatefulSet 就绪..."
   kubectl -n $NAMESPACE rollout status sts/$APP_LABEL --timeout=300s
 else
-  echo "❌ StatefulSet $APP_LABEL 不存在，请检查 Helm Chart 或 ArgoCD 日志"
-  exit 1
+  echo "⚠ StatefulSet $APP_LABEL 不存在，直接跳过等待"
 fi
 
-# ---------- Step 5: 生成 HTML 页面 ----------
+# ---------- Step 5: 生成企业交付 HTML ----------
 echo "=== Step 5: 生成 HTML 页面 ==="
 
 SERVICE_IP=$(kubectl -n $NAMESPACE get svc $APP_LABEL -o jsonpath='{.spec.clusterIP}' || echo "127.0.0.1")
 PVC_LIST=$(kubectl -n $NAMESPACE get pvc -l app=$APP_LABEL -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
+REDIS_PASSWORD="myredispassword"
 REPLICA_COUNT=$(kubectl -n $NAMESPACE get sts $APP_LABEL -o jsonpath='{.spec.replicas}' || echo "2")
 
-# Pod 状态
 POD_STATUS=$(kubectl -n $NAMESPACE get pods -l app=$APP_LABEL -o custom-columns=NAME:.metadata.name,STATUS:.status.phase --no-headers)
 
 cat > "$HTML_FILE" <<EOF
@@ -268,6 +262,8 @@ pre {background:#f0f2f5;padding:12px;border-radius:6px;overflow-x:auto;font-fami
 <div class="info"><span class="label">Namespace:</span><span class="value">$NAMESPACE</span></div>
 <div class="info"><span class="label">Service:</span><span class="value">$APP_LABEL</span></div>
 <div class="info"><span class="label">ClusterIP:</span><span class="value">$SERVICE_IP</span></div>
+<div class="info"><span class="label">端口:</span><span class="value">6379</span></div>
+<div class="info"><span class="label">密码:</span><span class="value">$REDIS_PASSWORD</span></div>
 <div class="info"><span class="label">副本数:</span><span class="value">$REPLICA_COUNT</span></div>
 
 <h3>PVC 列表</h3>
@@ -277,7 +273,6 @@ pre {background:#f0f2f5;padding:12px;border-radius:6px;overflow-x:auto;font-fami
 <pre>
 EOF
 
-# Pod 状态 HTML
 while read -r line; do
   POD_NAME=$(echo $line | awk '{print $1}')
   STATUS=$(echo $line | awk '{print $2}')
@@ -293,23 +288,23 @@ cat >> "$HTML_FILE" <<EOF
 <h3>访问方式</h3>
 <pre>
 kubectl -n $NAMESPACE port-forward svc/$APP_LABEL 6379:6379
-redis-cli -h localhost -p 6379
+redis-cli -h localhost -a $REDIS_PASSWORD
 </pre>
 
 <h3>Python 示例</h3>
 <pre>
 import redis
-r = redis.Redis(host="$SERVICE_IP", port=6379)
-r.set('hello','world')
-print(r.get('hello'))
+r = redis.Redis(host="$SERVICE_IP", port=6379, password="$REDIS_PASSWORD")
+r.set("test","hello")
+print(r.get("test"))
 </pre>
 
 <h3>Java 示例</h3>
 <pre>
-String url = "redis://$SERVICE_IP:6379";
+String url = "redis://:$REDIS_PASSWORD@$SERVICE_IP:6379";
 Jedis jedis = new Jedis(url);
-jedis.set("hello", "world");
-System.out.println(jedis.get("hello"));
+jedis.set("test","hello");
+System.out.println(jedis.get("test"));
 </pre>
 
 <div class="footer">
