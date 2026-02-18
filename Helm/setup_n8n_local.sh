@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 # ===================================================
 # n8n HA 企业级一键部署 + HTML 交付页面
-# 支持 Pod 状态可视化 + PostgreSQL 初始化
+# 带镜像可拉取检查 + PostgreSQL 初始化
 # ===================================================
 
 # ---------- 配置 ----------
@@ -20,12 +20,24 @@ POSTGRES_USER="myuser"
 POSTGRES_PASSWORD="mypassword"
 POSTGRES_DB_PREFIX="n8n"
 
+N8N_IMAGE="n8nio/n8n"
+N8N_TAG="2.224.0"
+
 mkdir -p "$CHART_DIR/templates" "$LOG_DIR"
 
 # ---------- Step 0: 清理已有 PVC/PV ----------
 echo "=== Step 0: 清理已有 PVC/PV ==="
 kubectl delete pvc -n $NAMESPACE -l app=$APP_LABEL --ignore-not-found --wait=false || true
 kubectl get pv -o name | grep n8n-pv- | xargs -r kubectl delete --ignore-not-found --wait=false || true
+
+# ---------- Step 0.5: 检查镜像可拉取 ----------
+echo "=== Step 0.5: 检查 n8n 镜像是否可拉取 ==="
+if ! docker pull ${N8N_IMAGE}:${N8N_TAG} >/dev/null 2>&1; then
+  echo "❌ 镜像 ${N8N_IMAGE}:${N8N_TAG} 无法拉取，请检查网络或镜像标签"
+  exit 1
+else
+  echo "✅ 镜像可拉取：${N8N_IMAGE}:${N8N_TAG}"
+fi
 
 # ---------- Step 1: 检测 StorageClass ----------
 echo "=== Step 1: 检测 StorageClass ==="
@@ -44,7 +56,7 @@ name: n8n-ha-chart
 description: "n8n Helm Chart for HA production"
 type: application
 version: 1.0.0
-appVersion: "2.224.1"
+appVersion: "2.224.0"
 EOF
 
 cat > "$CHART_DIR/values.yaml" <<EOF
@@ -52,7 +64,7 @@ replicaCount: 2
 image:
   registry: n8nio
   repository: n8n
-  tag: "2.224.1"
+  tag: "$N8N_TAG"
   pullPolicy: IfNotPresent
 
 persistence:
@@ -111,11 +123,17 @@ for i in {1..60}; do
     kubectl -n $NAMESPACE get sts n8n -o wide
     echo "--- Pod 状态 ---"
     kubectl -n $NAMESPACE get pods -l app=$APP_LABEL
-    if kubectl -n $NAMESPACE rollout status sts/n8n --timeout=30s; then
+    READY=$(kubectl -n $NAMESPACE get sts n8n -o jsonpath='{.status.readyReplicas}' || echo "0")
+    DESIRED=$(kubectl -n $NAMESPACE get sts n8n -o jsonpath='{.spec.replicas}' || echo "2")
+    if [ "$READY" == "$DESIRED" ]; then
       echo "✅ StatefulSet n8n 已就绪"
       break
-    else
-      echo "⏳ StatefulSet 正在就绪中..."
+    fi
+    # 检查 Pod 是否有 ErrImagePull
+    ERRPOD=$(kubectl -n $NAMESPACE get pods -l app=$APP_LABEL -o jsonpath='{.items[?(@.status.containerStatuses[*].state.waiting.reason=="ErrImagePull")].metadata.name}' || true)
+    if [ -n "$ERRPOD" ]; then
+      echo "❌ Pod 镜像拉取失败: $ERRPOD"
+      exit 1
     fi
   else
     echo "⚠️ StatefulSet n8n 尚未创建，等待 5s..."
@@ -221,7 +239,6 @@ kubectl -n $NAMESPACE port-forward svc/n8n 5678:5678
 
 <h3>Python 示例</h3>
 <pre>
-# 使用 PostgreSQL 数据库
 import psycopg2
 conn = psycopg2.connect(
     host="$DB_HOST",
