@@ -4,7 +4,6 @@ set -Eeuo pipefail
 # ===================================================
 # n8n HA 企业级一键部署 + HTML 交付页面
 # 支持 Pod 状态可视化 + PostgreSQL 初始化
-# 直接 Helm 安装，无需 ArgoCD
 # ===================================================
 
 # ---------- 配置 ----------
@@ -76,8 +75,6 @@ postgres:
   dbPrefix: $POSTGRES_DB_PREFIX
 EOF
 
-# 模板文件（略，可使用你原来的 statefulset.yaml / service.yaml / headless-service.yaml）
-
 # ---------- Step 3: 手动 PV (如无 StorageClass) ----------
 if [ -z "$SC_NAME" ]; then
   echo "=== Step 3: 创建手动 PV ==="
@@ -106,15 +103,24 @@ fi
 echo "=== Step 4: 使用 Helm 安装 n8n HA ==="
 helm upgrade --install n8n-ha $CHART_DIR -n $NAMESPACE --create-namespace
 
-# ---------- Step 4a: 等待 StatefulSet ----------
+# ---------- Step 4a: 等待 StatefulSet 就绪 + Log ----------
 echo "等待 n8n StatefulSet 就绪..."
 for i in {1..60}; do
+  echo "[$i] 检查 StatefulSet n8n 状态..."
   if kubectl -n $NAMESPACE get sts n8n >/dev/null 2>&1; then
-    kubectl -n $NAMESPACE rollout status sts/n8n --timeout=300s && break
+    kubectl -n $NAMESPACE get sts n8n -o wide
+    echo "--- Pod 状态 ---"
+    kubectl -n $NAMESPACE get pods -l app=$APP_LABEL
+    if kubectl -n $NAMESPACE rollout status sts/n8n --timeout=30s; then
+      echo "✅ StatefulSet n8n 已就绪"
+      break
+    else
+      echo "⏳ StatefulSet 正在就绪中..."
+    fi
   else
-    echo "[$i] StatefulSet n8n 尚未创建，等待 5s..."
-    sleep 5
+    echo "⚠️ StatefulSet n8n 尚未创建，等待 5s..."
   fi
+  sleep 5
 done
 
 # ---------- Step 4b: 测试 PostgreSQL 连通性并初始化 ----------
@@ -145,5 +151,106 @@ if [ -z "$DB_ERROR" ]; then
   fi
 fi
 
-# ---------- Step 5: 生成 HTML 页面 ----------
-# ... 这里使用你之前生成 HTML 的逻辑，不变
+# ---------- Step 5: 生成企业交付 HTML ----------
+echo "=== Step 5: 生成 HTML 页面 ==="
+PVC_LIST=$(kubectl -n $NAMESPACE get pvc -l app=$APP_LABEL -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
+REPLICA_COUNT=$(kubectl -n $NAMESPACE get sts n8n -o jsonpath='{.spec.replicas}' || echo "2")
+POD_STATUS=$(kubectl -n $NAMESPACE get pods -l app=$APP_LABEL -o custom-columns=NAME:.metadata.name,STATUS:.status.phase --no-headers || true)
+
+cat > "$HTML_FILE" <<EOF
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>n8n HA 企业交付指南</title>
+<style>
+body {margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f5f7fa}
+.container {display:flex;justify-content:center;align-items:flex-start;padding:30px}
+.card {background:#fff;padding:30px 40px;border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.08);width:700px}
+h2 {color:#1677ff;margin-bottom:20px;text-align:center}
+h3 {color:#444;margin-top:25px;margin-bottom:10px;border-bottom:1px solid #eee;padding-bottom:5px}
+pre {background:#f0f2f5;padding:12px;border-radius:6px;overflow-x:auto;font-family:monospace}
+.info {margin-bottom:10px}
+.label {font-weight:600;color:#333}
+.value {color:#555;margin-left:5px}
+.status-running {color:green;font-weight:600}
+.status-pending {color:orange;font-weight:600}
+.status-failed {color:red;font-weight:600}
+.footer {margin-top:20px;font-size:12px;color:#888;text-align:center}
+</style>
+</head>
+<body>
+<div class="container">
+<div class="card">
+<h2>🎉 n8n HA 安装完成</h2>
+
+<h3>数据库信息</h3>
+<div class="info"><span class="label">Namespace:</span><span class="value">$NAMESPACE</span></div>
+<div class="info"><span class="label">Service:</span><span class="value">n8n</span></div>
+<div class="info"><span class="label">PostgreSQL:</span><span class="value">$DB_HOST</span></div>
+<div class="info"><span class="label">用户名:</span><span class="value">$POSTGRES_USER</span></div>
+<div class="info"><span class="label">密码:</span><span class="value">$POSTGRES_PASSWORD</span></div>
+<div class="info"><span class="label">数据库:</span><span class="value">$DB_NAME</span></div>
+<div class="info"><span class="label">副本数:</span><span class="value">$REPLICA_COUNT</span></div>
+<div class="info"><span class="label">初始化状态:</span><span class="value">$DB_INIT_STATUS</span></div>
+<div class="info"><span class="label">错误信息:</span><span class="value">$DB_ERROR</span></div>
+
+<h3>PVC 列表</h3>
+<pre>$PVC_LIST</pre>
+
+<h3>Pod 状态</h3>
+<pre>
+EOF
+
+while read -r line; do
+  POD_NAME=$(echo $line | awk '{print $1}')
+  STATUS=$(echo $line | awk '{print $2}')
+  CASE_CLASS="status-failed"
+  [[ "$STATUS" == "Running" ]] && CASE_CLASS="status-running"
+  [[ "$STATUS" == "Pending" ]] && CASE_CLASS="status-pending"
+  echo "<div class=\"$CASE_CLASS\">$POD_NAME : $STATUS</div>" >> "$HTML_FILE"
+done <<< "$POD_STATUS"
+
+cat >> "$HTML_FILE" <<EOF
+</pre>
+
+<h3>访问方式</h3>
+<pre>
+kubectl -n $NAMESPACE port-forward svc/n8n 5678:5678
+</pre>
+
+<h3>Python 示例</h3>
+<pre>
+# 使用 PostgreSQL 数据库
+import psycopg2
+conn = psycopg2.connect(
+    host="$DB_HOST",
+    database="$DB_NAME",
+    user="$POSTGRES_USER",
+    password="$POSTGRES_PASSWORD"
+)
+cur = conn.cursor()
+cur.execute("SELECT version();")
+print(cur.fetchone())
+</pre>
+
+<h3>Java 示例</h3>
+<pre>
+String url = "jdbc:postgresql://$DB_HOST:5432/$DB_NAME";
+Properties props = new Properties();
+props.setProperty("user","$POSTGRES_USER");
+props.setProperty("password","$POSTGRES_PASSWORD");
+Connection conn = DriverManager.getConnection(url, props);
+</pre>
+
+<div class="footer">
+生成时间: $(date '+%Y-%m-%d %H:%M:%S')
+</div>
+
+</div>
+</div>
+</body>
+</html>
+EOF
+
+echo "✅ n8n HA 企业交付 HTML 页面已生成: $HTML_FILE"
