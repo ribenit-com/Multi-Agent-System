@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 # ===================================================
 # n8n HA 企业级一键部署 + HTML 交付页面
-# 支持 Pod 状态可视化，containerd 环境
+# 支持 containerd 节点、Pod 状态可视化
 # ===================================================
 
 # ---------- 配置 ----------
@@ -24,15 +24,9 @@ echo "=== Step 0: 清理已有 PVC/PV ==="
 kubectl delete pvc -n $NAMESPACE -l app=$APP_LABEL --ignore-not-found --wait=false || true
 kubectl get pv -o name | grep n8n-pv- | xargs -r kubectl delete --ignore-not-found --wait=false || true
 
-# ---------- Step 0.5: 拉取 n8n 镜像 (containerd) ----------
+# ---------- Step 0.5: 在节点上提前拉取 n8n 镜像（containerd） ----------
 echo "=== Step 0.5: 在节点上提前拉取 n8n 镜像 (containerd) ==="
-if command -v ctr >/dev/null 2>&1; then
-  echo "使用 containerd 拉取镜像: $N8N_IMAGE"
-  sudo ctr images pull docker.io/$N8N_IMAGE
-  echo "✅ 镜像已拉取到 containerd"
-else
-  echo "⚠️ 未检测到 containerd，请手动拉取 $N8N_IMAGE"
-fi
+sudo ctr image pull $N8N_IMAGE
 
 # ---------- Step 1: 检测 StorageClass ----------
 echo "=== Step 1: 检测 StorageClass ==="
@@ -45,7 +39,6 @@ fi
 
 # ---------- Step 2: 创建 Helm Chart ----------
 echo "=== Step 2: 创建 Helm Chart ==="
-
 cat > "$CHART_DIR/Chart.yaml" <<EOF
 apiVersion: v2
 name: n8n-ha-chart
@@ -61,7 +54,7 @@ image:
   registry: n8nio
   repository: n8n
   tag: "2.8.2"
-  pullPolicy: IfNotPresent
+  pullPolicy: Never  # 使用本地 containerd 镜像
 
 persistence:
   enabled: true
@@ -126,7 +119,7 @@ spec:
   ports:
     - port: 5678
       targetPort: 5678
-      name: n8n
+      name: http
   selector:
     app: n8n
 EOF
@@ -145,6 +138,30 @@ spec:
     app: n8n
 EOF
 
+# ---------- Step 3: 手动 PV (如无 StorageClass) ----------
+if [ -z "$SC_NAME" ]; then
+  echo "=== Step 3: 创建手动 PV ==="
+  for i in $(seq 0 1); do
+    PV_NAME="n8n-pv-$i"
+    mkdir -p /mnt/data/n8n-$i
+    cat > /tmp/$PV_NAME.yaml <<EOF
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: $PV_NAME
+spec:
+  capacity:
+    storage: $PVC_SIZE
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: /mnt/data/n8n-$i
+  persistentVolumeReclaimPolicy: Retain
+EOF
+    kubectl apply -f /tmp/$PV_NAME.yaml
+  done
+fi
+
 # ---------- Step 4: 使用 Helm 安装 n8n HA ----------
 echo "=== Step 4: 使用 Helm 安装 n8n HA ==="
 if helm status n8n-ha -n $NAMESPACE >/dev/null 2>&1; then
@@ -158,22 +175,26 @@ fi
 # ---------- Step 4a: 等待 StatefulSet ----------
 echo "等待 n8n StatefulSet 就绪..."
 for i in {1..60}; do
-  echo "[$i] 检查 StatefulSet n8n 状态..."
-  kubectl -n $NAMESPACE get sts n8n
-  kubectl -n $NAMESPACE get pods -l app=n8n
-  if kubectl -n $NAMESPACE rollout status sts/n8n --timeout=30s; then
-    echo "✅ StatefulSet 已就绪"
-    break
+  if kubectl -n $NAMESPACE get sts n8n >/dev/null 2>&1; then
+    READY=$(kubectl -n $NAMESPACE get sts n8n -o jsonpath='{.status.readyReplicas}' || echo "0")
+    DESIRED=$(kubectl -n $NAMESPACE get sts n8n -o jsonpath='{.spec.replicas}' || echo "2")
+    echo "[${i}] StatefulSet n8n: $READY/$DESIRED 就绪"
+    if [ "$READY" == "$DESIRED" ]; then
+      echo "✅ StatefulSet 已就绪"
+      break
+    fi
+  else
+    echo "[${i}] StatefulSet n8n 尚未创建，等待 5s..."
   fi
-  echo "⏳ StatefulSet 正在就绪中..."
   sleep 5
 done
 
-# ---------- Step 5: 生成 HTML 页面 ----------
-echo "=== Step 5: 生成企业交付 HTML 页面 ==="
+# ---------- Step 5: 生成企业交付 HTML ----------
+echo "=== Step 5: 生成 HTML 页面 ==="
 SERVICE_IP=$(kubectl -n $NAMESPACE get svc n8n -o jsonpath='{.spec.clusterIP}' || echo "127.0.0.1")
 PVC_LIST=$(kubectl -n $NAMESPACE get pvc -l app=$APP_LABEL -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
 REPLICA_COUNT=$(kubectl -n $NAMESPACE get sts n8n -o jsonpath='{.spec.replicas}' || echo "2")
+
 POD_STATUS=$(kubectl -n $NAMESPACE get pods -l app=$APP_LABEL -o custom-columns=NAME:.metadata.name,STATUS:.status.phase --no-headers || true)
 
 cat > "$HTML_FILE" <<EOF
@@ -182,6 +203,7 @@ cat > "$HTML_FILE" <<EOF
 <head>
 <meta charset="UTF-8">
 <title>n8n HA 企业交付指南</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 body {margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f5f7fa}
 .container {display:flex;justify-content:center;align-items:flex-start;padding:30px}
