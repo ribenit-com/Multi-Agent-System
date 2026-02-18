@@ -2,25 +2,20 @@
 set -Eeuo pipefail
 
 # ===================================================
-# n8n HA 企业级一键部署 + HTML 交付页面 + PostgreSQL 检测
+# n8n HA 企业级一键部署 + HTML 交付页面
+# 支持 Pod 状态可视化，containerd 环境
 # ===================================================
 
 # ---------- 配置 ----------
 CHART_DIR="$HOME/gitops/n8n-ha-chart"
 NAMESPACE="automation"
+ARGO_APP="n8n-ha"
+GITHUB_REPO="ribenit-com/Multi-Agent-k8s-gitops-n8n"
 PVC_SIZE="10Gi"
 APP_LABEL="n8n"
 LOG_DIR="/mnt/truenas"
 HTML_FILE="${LOG_DIR}/n8n_ha_info.html"
-
-POSTGRES_SERVICE="postgres"
-POSTGRES_NAMESPACE="database"
-POSTGRES_USER="myuser"
-POSTGRES_PASSWORD="mypassword"
-POSTGRES_DB_PREFIX="n8n"
-
-N8N_IMAGE="n8nio/n8n"
-N8N_TAG="2.8.2"   # 官方稳定版本
+N8N_IMAGE="n8nio/n8n:2.8.2"
 
 mkdir -p "$CHART_DIR/templates" "$LOG_DIR"
 
@@ -29,9 +24,15 @@ echo "=== Step 0: 清理已有 PVC/PV ==="
 kubectl delete pvc -n $NAMESPACE -l app=$APP_LABEL --ignore-not-found --wait=false || true
 kubectl get pv -o name | grep n8n-pv- | xargs -r kubectl delete --ignore-not-found --wait=false || true
 
-# ---------- Step 0.5: 节点提前拉取 n8n 镜像，显示下载进度 ----------
-echo "=== Step 0.5: 在节点上提前拉取 n8n 镜像 (需要 sudo) ==="
-sudo docker pull ${N8N_IMAGE}:${N8N_TAG}
+# ---------- Step 0.5: 拉取 n8n 镜像 (containerd) ----------
+echo "=== Step 0.5: 在节点上提前拉取 n8n 镜像 (containerd) ==="
+if command -v ctr >/dev/null 2>&1; then
+  echo "使用 containerd 拉取镜像: $N8N_IMAGE"
+  sudo ctr images pull docker.io/$N8N_IMAGE
+  echo "✅ 镜像已拉取到 containerd"
+else
+  echo "⚠️ 未检测到 containerd，请手动拉取 $N8N_IMAGE"
+fi
 
 # ---------- Step 1: 检测 StorageClass ----------
 echo "=== Step 1: 检测 StorageClass ==="
@@ -44,13 +45,14 @@ fi
 
 # ---------- Step 2: 创建 Helm Chart ----------
 echo "=== Step 2: 创建 Helm Chart ==="
+
 cat > "$CHART_DIR/Chart.yaml" <<EOF
 apiVersion: v2
 name: n8n-ha-chart
-description: "n8n Helm Chart for HA production"
+description: "n8n HA Helm Chart"
 type: application
 version: 1.0.0
-appVersion: "$N8N_TAG"
+appVersion: "2.8.2"
 EOF
 
 cat > "$CHART_DIR/values.yaml" <<EOF
@@ -58,7 +60,7 @@ replicaCount: 2
 image:
   registry: n8nio
   repository: n8n
-  tag: "$N8N_TAG"
+  tag: "2.8.2"
   pullPolicy: IfNotPresent
 
 persistence:
@@ -68,104 +70,111 @@ persistence:
 
 resources:
   requests:
+    memory: 256Mi
+    cpu: 100m
+  limits:
     memory: 512Mi
     cpu: 250m
-  limits:
-    memory: 1Gi
-    cpu: 500m
-
-postgres:
-  host: $POSTGRES_SERVICE.$POSTGRES_NAMESPACE.svc.cluster.local
-  user: $POSTGRES_USER
-  password: $POSTGRES_PASSWORD
-  dbPrefix: $POSTGRES_DB_PREFIX
 EOF
 
-# ---------- Step 3: 手动 PV (如无 StorageClass) ----------
-if [ -z "$SC_NAME" ]; then
-  echo "=== Step 3: 创建手动 PV ==="
-  for i in $(seq 0 1); do
-    PV_NAME="n8n-pv-$i"
-    mkdir -p /mnt/data/n8n-$i
-    cat > /tmp/$PV_NAME.yaml <<EOF
-apiVersion: v1
-kind: PersistentVolume
+cat > "$CHART_DIR/templates/statefulset.yaml" <<'EOF'
+apiVersion: apps/v1
+kind: StatefulSet
 metadata:
-  name: $PV_NAME
+  name: n8n
+  labels:
+    app: n8n
 spec:
-  capacity:
-    storage: $PVC_SIZE
-  accessModes:
-    - ReadWriteOnce
-  hostPath:
-    path: /mnt/data/n8n-$i
-  persistentVolumeReclaimPolicy: Retain
+  serviceName: n8n-headless
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: n8n
+  template:
+    metadata:
+      labels:
+        app: n8n
+    spec:
+      containers:
+        - name: n8n
+          image: "{{ .Values.image.registry }}/{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - containerPort: 5678
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: {{ .Values.persistence.size }}
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass }}
+        {{- end }}
 EOF
-    kubectl apply -f /tmp/$PV_NAME.yaml
-  done
+
+cat > "$CHART_DIR/templates/service.yaml" <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: n8n
+spec:
+  type: ClusterIP
+  ports:
+    - port: 5678
+      targetPort: 5678
+      name: n8n
+  selector:
+    app: n8n
+EOF
+
+cat > "$CHART_DIR/templates/headless-service.yaml" <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: n8n-headless
+spec:
+  clusterIP: None
+  ports:
+    - port: 5678
+      targetPort: 5678
+  selector:
+    app: n8n
+EOF
+
+# ---------- Step 4: 使用 Helm 安装 n8n HA ----------
+echo "=== Step 4: 使用 Helm 安装 n8n HA ==="
+if helm status n8n-ha -n $NAMESPACE >/dev/null 2>&1; then
+  echo "Release 已存在，升级 Helm Chart..."
+  helm upgrade n8n-ha "$CHART_DIR" -n $NAMESPACE
+else
+  echo "Release 不存在，安装 Helm Chart..."
+  helm install n8n-ha "$CHART_DIR" -n $NAMESPACE --create-namespace
 fi
 
-# ---------- Step 4: Helm 安装 n8n ----------
-echo "=== Step 4: 使用 Helm 安装 n8n HA ==="
-helm upgrade --install n8n-ha $CHART_DIR -n $NAMESPACE --create-namespace
-
-# ---------- Step 4a: 等待 StatefulSet 就绪 + Log ----------
+# ---------- Step 4a: 等待 StatefulSet ----------
 echo "等待 n8n StatefulSet 就绪..."
 for i in {1..60}; do
   echo "[$i] 检查 StatefulSet n8n 状态..."
-  if kubectl -n $NAMESPACE get sts n8n >/dev/null 2>&1; then
-    kubectl -n $NAMESPACE get sts n8n -o wide
-    echo "--- Pod 状态 ---"
-    kubectl -n $NAMESPACE get pods -l app=$APP_LABEL
-    READY=$(kubectl -n $NAMESPACE get sts n8n -o jsonpath='{.status.readyReplicas}' || echo "0")
-    DESIRED=$(kubectl -n $NAMESPACE get sts n8n -o jsonpath='{.spec.replicas}' || echo "2")
-    if [ "$READY" == "$DESIRED" ]; then
-      echo "✅ StatefulSet n8n 已就绪"
-      break
-    fi
-    ERRPOD=$(kubectl -n $NAMESPACE get pods -l app=$APP_LABEL -o jsonpath='{.items[?(@.status.containerStatuses[*].state.waiting.reason=="ErrImagePull")].metadata.name}' || true)
-    if [ -n "$ERRPOD" ]; then
-      echo "❌ Pod 镜像拉取失败: $ERRPOD"
-      exit 1
-    fi
-  else
-    echo "⚠️ StatefulSet n8n 尚未创建，等待 5s..."
+  kubectl -n $NAMESPACE get sts n8n
+  kubectl -n $NAMESPACE get pods -l app=n8n
+  if kubectl -n $NAMESPACE rollout status sts/n8n --timeout=30s; then
+    echo "✅ StatefulSet 已就绪"
+    break
   fi
+  echo "⏳ StatefulSet 正在就绪中..."
   sleep 5
 done
 
-# ---------- Step 4b: 测试 PostgreSQL 连通性并初始化 ----------
-echo "=== Step 4b: 测试 PostgreSQL 连通性并初始化数据库 ==="
-DB_HOST=$(kubectl -n $POSTGRES_NAMESPACE get svc $POSTGRES_SERVICE -o jsonpath='{.spec.clusterIP}')
-DB_NAME="${POSTGRES_DB_PREFIX}_$(date +%s)"
-DB_INIT_STATUS="未执行"
-DB_ERROR=""
-
-for i in {1..12}; do
-  echo "尝试连接 PostgreSQL ($DB_HOST)... [$i/12]"
-  PGPASSWORD=$POSTGRES_PASSWORD psql -h $DB_HOST -U $POSTGRES_USER -d postgres -c "\q" >/dev/null 2>&1 && break
-  sleep 5
-  if [ $i -eq 12 ]; then
-    DB_ERROR="⚠️ 无法连接 PostgreSQL 服务 $DB_HOST"
-    echo $DB_ERROR
-  fi
-done
-
-if [ -z "$DB_ERROR" ]; then
-  echo "✅ PostgreSQL 可连接，开始初始化数据库 $DB_NAME"
-  INIT_SQL="CREATE DATABASE $DB_NAME;"
-  if PGPASSWORD=$POSTGRES_PASSWORD psql -h $DB_HOST -U $POSTGRES_USER -d postgres -c "$INIT_SQL"; then
-    DB_INIT_STATUS="✅ 数据库 $DB_NAME 初始化成功"
-  else
-    DB_INIT_STATUS="❌ 数据库 $DB_NAME 初始化失败"
-    DB_ERROR="初始化数据库失败，请检查用户权限或网络"
-  fi
-fi
-
-# ---------- Step 5: 生成 HTML 报告 ----------
-echo "=== Step 5: 生成 HTML 页面 ==="
-POD_STATUS=$(kubectl -n $NAMESPACE get pods -l app=$APP_LABEL -o custom-columns=NAME:.metadata.name,STATUS:.status.phase --no-headers || true)
+# ---------- Step 5: 生成 HTML 页面 ----------
+echo "=== Step 5: 生成企业交付 HTML 页面 ==="
+SERVICE_IP=$(kubectl -n $NAMESPACE get svc n8n -o jsonpath='{.spec.clusterIP}' || echo "127.0.0.1")
 PVC_LIST=$(kubectl -n $NAMESPACE get pvc -l app=$APP_LABEL -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
+REPLICA_COUNT=$(kubectl -n $NAMESPACE get sts n8n -o jsonpath='{.spec.replicas}' || echo "2")
+POD_STATUS=$(kubectl -n $NAMESPACE get pods -l app=$APP_LABEL -o custom-columns=NAME:.metadata.name,STATUS:.status.phase --no-headers || true)
 
 cat > "$HTML_FILE" <<EOF
 <!DOCTYPE html>
@@ -173,8 +182,6 @@ cat > "$HTML_FILE" <<EOF
 <head>
 <meta charset="UTF-8">
 <title>n8n HA 企业交付指南</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="refresh" content="10">
 <style>
 body {margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f5f7fa}
 .container {display:flex;justify-content:center;align-items:flex-start;padding:30px}
@@ -197,12 +204,11 @@ pre {background:#f0f2f5;padding:12px;border-radius:6px;overflow-x:auto;font-fami
 <h2>🎉 n8n HA 安装完成</h2>
 
 <h3>数据库信息</h3>
-<div class="info"><span class="label">PostgreSQL:</span><span class="value">$POSTGRES_SERVICE.$POSTGRES_NAMESPACE</span></div>
-<div class="info"><span class="label">用户名:</span><span class="value">$POSTGRES_USER</span></div>
-<div class="info"><span class="label">密码:</span><span class="value">$POSTGRES_PASSWORD</span></div>
-<div class="info"><span class="label">数据库:</span><span class="value">$DB_NAME</span></div>
-<div class="info"><span class="label">副本数:</span><span class="value">2</span></div>
-<div class="info"><span class="label">数据库初始化:</span><span class="value">$DB_INIT_STATUS</span></div>
+<div class="info"><span class="label">Namespace:</span><span class="value">$NAMESPACE</span></div>
+<div class="info"><span class="label">Service:</span><span class="value">n8n</span></div>
+<div class="info"><span class="label">ClusterIP:</span><span class="value">$SERVICE_IP</span></div>
+<div class="info"><span class="label">端口:</span><span class="value">5678</span></div>
+<div class="info"><span class="label">副本数:</span><span class="value">$REPLICA_COUNT</span></div>
 
 <h3>PVC 列表</h3>
 <pre>$PVC_LIST</pre>
@@ -226,29 +232,6 @@ cat >> "$HTML_FILE" <<EOF
 <h3>访问方式</h3>
 <pre>
 kubectl -n $NAMESPACE port-forward svc/n8n 5678:5678
-</pre>
-
-<h3>Python 示例</h3>
-<pre>
-import psycopg2
-conn = psycopg2.connect(
-    host="$POSTGRES_SERVICE.$POSTGRES_NAMESPACE.svc.cluster.local",
-    database="$DB_NAME",
-    user="$POSTGRES_USER",
-    password="$POSTGRES_PASSWORD"
-)
-cur = conn.cursor()
-cur.execute("SELECT version();")
-print(cur.fetchone())
-</pre>
-
-<h3>Java 示例</h3>
-<pre>
-String url = "jdbc:postgresql://$POSTGRES_SERVICE.$POSTGRES_NAMESPACE.svc.cluster.local:5432/$DB_NAME";
-Properties props = new Properties();
-props.setProperty("user","$POSTGRES_USER");
-props.setProperty("password","$POSTGRES_PASSWORD");
-Connection conn = DriverManager.getConnection(url, props);
 </pre>
 
 <div class="footer">
