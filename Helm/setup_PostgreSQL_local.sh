@@ -12,6 +12,14 @@ NAMESPACE="database"
 ARGO_APP="postgres-ha"
 GITHUB_REPO="ribenit-com/Multi-Agent-k8s-gitops-postgres"
 
+echo "=== Step 0: 检测集群 StorageClass ==="
+SC_NAME=$(kubectl get storageclass -o jsonpath='{.items[0].metadata.name}' || true)
+if [ -z "$SC_NAME" ]; then
+  echo "⚠️ 集群没有 StorageClass，将不指定 StorageClass"
+else
+  echo "✅ 检测到 StorageClass: $SC_NAME"
+fi
+
 echo "=== Step 1: 创建 Helm Chart 目录 ==="
 mkdir -p "$CHART_DIR/templates"
 
@@ -43,7 +51,7 @@ postgresql:
 persistence:
   enabled: true
   size: 10Gi
-  storageClass: standard
+  storageClass: ${SC_NAME:-""}  # 如果为空，Helm 模板里不指定 StorageClass
 
 resources:
   requests:
@@ -104,7 +112,9 @@ spec:
         resources:
           requests:
             storage: {{ .Values.persistence.size }}
+        {{- if .Values.persistence.storageClass }}
         storageClassName: {{ .Values.persistence.storageClass }}
+        {{- end }}
 EOF
 
 echo "=== Step 5: 写入 templates/service.yaml ==="
