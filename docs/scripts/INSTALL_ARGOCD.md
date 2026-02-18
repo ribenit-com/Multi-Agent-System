@@ -76,5 +76,9 @@ curl -fsSL https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main
 访问地址: https://服务器IP:30100
 用户名: admin
 密码: xxxxxxxx
+| 参数         | 说明                    |
+| ---------- | --------------------- |
+| HTTP_PORT  | ArgoCD HTTP NodePort  |
+| HTTPS_PORT | ArgoCD HTTPS NodePort |
 
 
