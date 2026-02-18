@@ -4,24 +4,27 @@ set -Eeuo pipefail
 # ===================================================
 # Redis HA 企业级一键部署 + HTML 交付页面
 # 支持 Pod 状态可视化
-# 功能：
-# - 自动清理冲突 PVC/PV
-# - 自动创建 StatefulSet + Service
-# - 等待 StatefulSet 就绪
-# - 生成企业交付 HTML 页面
+#  功能总结：
+# 自动清理冲突 PVC/PV
+# 自动生成 Helm Chart + 手动 PV（如无 StorageClass）
+# 直接部署 StatefulSet 和 Service（无需 ArgoCD）
+# 等待 StatefulSet 就绪
+# 生成企业交付 HTML 页面
+# 显示每个 Pod 状态：Running（绿色）、Pending（橙色）、Failed/CrashLoop（红色）
+# 页面内显示 PVC、访问方式、Python/Java 示例代码
 # ===================================================
 
 # ---------- 配置 ----------
 CHART_DIR="$HOME/gitops/redis-ha-chart"
 NAMESPACE="database"
+PVC_SIZE="10Gi"
 APP_LABEL="redis"
-PVC_SIZE="5Gi"
-REPLICA_COUNT=2
 LOG_DIR="/mnt/truenas"
 HTML_FILE="${LOG_DIR}/redis_ha_info.html"
-IMAGE="redis:7.2.2"
+REDIS_PASSWORD="myredispassword"
+REPLICA_COUNT=2
 
-mkdir -p "$CHART_DIR" "$LOG_DIR"
+mkdir -p "$CHART_DIR/templates" "$LOG_DIR"
 
 # ---------- Step 0: 清理已有 PVC/PV ----------
 echo "=== Step 0: 清理已有 PVC/PV ==="
@@ -61,27 +64,8 @@ EOF
   done
 fi
 
-# ---------- Step 3: 创建 Namespace ----------
-kubectl get ns $NAMESPACE >/dev/null 2>&1 || kubectl create ns $NAMESPACE
-
-# ---------- Step 4: 创建 Headless Service ----------
-cat > /tmp/redis-headless.yaml <<EOF
-apiVersion: v1
-kind: Service
-metadata:
-  name: redis-headless
-  namespace: $NAMESPACE
-spec:
-  clusterIP: None
-  ports:
-    - port: 6379
-      targetPort: 6379
-  selector:
-    app: $APP_LABEL
-EOF
-kubectl apply -f /tmp/redis-headless.yaml
-
-# ---------- Step 5: 创建 StatefulSet ----------
+# ---------- Step 3: 创建 StatefulSet ----------
+echo "=== Step 3: 创建 Redis StatefulSet ==="
 cat > /tmp/redis-sts.yaml <<EOF
 apiVersion: apps/v1
 kind: StatefulSet
@@ -89,7 +73,7 @@ metadata:
   name: $APP_LABEL
   namespace: $NAMESPACE
 spec:
-  serviceName: redis-headless
+  serviceName: $APP_LABEL-headless
   replicas: $REPLICA_COUNT
   selector:
     matchLabels:
@@ -100,8 +84,9 @@ spec:
         app: $APP_LABEL
     spec:
       containers:
-      - name: redis
-        image: $IMAGE
+      - name: $APP_LABEL
+        image: redis:7.2
+        command: ["redis-server", "--requirepass", "$REDIS_PASSWORD"]
         ports:
         - containerPort: 6379
         volumeMounts:
@@ -120,7 +105,8 @@ EOF
 
 kubectl apply -f /tmp/redis-sts.yaml
 
-# ---------- Step 6: 创建 ClusterIP Service ----------
+# ---------- Step 4: 创建 Service ----------
+echo "=== Step 4: 创建 Redis Service ==="
 cat > /tmp/redis-svc.yaml <<EOF
 apiVersion: v1
 kind: Service
@@ -128,22 +114,39 @@ metadata:
   name: $APP_LABEL
   namespace: $NAMESPACE
 spec:
-  type: ClusterIP
-  ports:
-    - port: 6379
-      targetPort: 6379
   selector:
     app: $APP_LABEL
+  ports:
+  - port: 6379
+    targetPort: 6379
 EOF
 
 kubectl apply -f /tmp/redis-svc.yaml
 
-# ---------- Step 7: 等待 StatefulSet 就绪 ----------
+# ---------- Step 4a: 创建 Headless Service ----------
+cat > /tmp/redis-headless.yaml <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: $APP_LABEL-headless
+  namespace: $NAMESPACE
+spec:
+  clusterIP: None
+  selector:
+    app: $APP_LABEL
+  ports:
+  - port: 6379
+    targetPort: 6379
+EOF
+
+kubectl apply -f /tmp/redis-headless.yaml
+
+# ---------- Step 5: 等待 StatefulSet 就绪 ----------
 echo "等待 Redis StatefulSet 就绪..."
 kubectl -n $NAMESPACE rollout status sts/$APP_LABEL --timeout=300s
 
-# ---------- Step 8: 生成企业交付 HTML ----------
-echo "=== Step 8: 生成 HTML 页面 ==="
+# ---------- Step 6: 生成 HTML 页面 ----------
+echo "=== Step 6: 生成 HTML 页面 ==="
 SERVICE_IP=$(kubectl -n $NAMESPACE get svc $APP_LABEL -o jsonpath='{.spec.clusterIP}' || echo "127.0.0.1")
 PVC_LIST=$(kubectl -n $NAMESPACE get pvc -l app=$APP_LABEL -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
 POD_STATUS=$(kubectl -n $NAMESPACE get pods -l app=$APP_LABEL -o custom-columns=NAME:.metadata.name,STATUS:.status.phase --no-headers)
@@ -181,6 +184,7 @@ pre {background:#f0f2f5;padding:12px;border-radius:6px;overflow-x:auto;font-fami
 <div class="info"><span class="label">Service:</span><span class="value">$APP_LABEL</span></div>
 <div class="info"><span class="label">ClusterIP:</span><span class="value">$SERVICE_IP</span></div>
 <div class="info"><span class="label">端口:</span><span class="value">6379</span></div>
+<div class="info"><span class="label">密码:</span><span class="value">$REDIS_PASSWORD</span></div>
 <div class="info"><span class="label">副本数:</span><span class="value">$REPLICA_COUNT</span></div>
 
 <h3>PVC 列表</h3>
@@ -205,14 +209,23 @@ cat >> "$HTML_FILE" <<EOF
 <h3>访问方式</h3>
 <pre>
 kubectl -n $NAMESPACE port-forward svc/$APP_LABEL 6379:6379
-redis-cli -h localhost -p 6379
+redis-cli -h localhost -a $REDIS_PASSWORD
 </pre>
 
 <h3>Python 示例</h3>
 <pre>
 import redis
-r = redis.Redis(host="$SERVICE_IP", port=6379)
-print(r.ping())
+r = redis.Redis(host="$SERVICE_IP", port=6379, password="$REDIS_PASSWORD")
+r.set("test","hello")
+print(r.get("test"))
+</pre>
+
+<h3>Java 示例</h3>
+<pre>
+String url = "redis://:$REDIS_PASSWORD@$SERVICE_IP:6379";
+Jedis jedis = new Jedis(url);
+jedis.set("test","hello");
+System.out.println(jedis.get("test"));
 </pre>
 
 <div class="footer">
