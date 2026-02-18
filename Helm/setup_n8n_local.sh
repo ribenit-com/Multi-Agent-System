@@ -10,7 +10,6 @@ set -Eeuo pipefail
 CHART_DIR="$HOME/gitops/n8n-ha-chart"
 NAMESPACE="automation"
 ARGO_APP="n8n-ha"
-GITHUB_REPO="ribenit-com/Multi-Agent-k8s-gitops-n8n"
 PVC_SIZE="10Gi"
 APP_LABEL="n8n"
 LOG_DIR="/mnt/truenas"
@@ -24,9 +23,17 @@ echo "=== Step 0: 清理已有 PVC/PV ==="
 kubectl delete pvc -n $NAMESPACE -l app=$APP_LABEL --ignore-not-found --wait=false || true
 kubectl get pv -o name | grep n8n-pv- | xargs -r kubectl delete --ignore-not-found --wait=false || true
 
-# ---------- Step 0.5: 在节点上提前拉取 n8n 镜像（containerd） ----------
-echo "=== Step 0.5: 在节点上提前拉取 n8n 镜像 (containerd) ==="
-sudo ctr image pull $N8N_IMAGE
+# ---------- Step 0.5: 检查 containerd 镜像 ----------
+echo "=== Step 0.5: 检查 containerd 镜像 ==="
+if ! sudo ctr -n k8s.io images ls | grep -q "${N8N_IMAGE}"; then
+  echo "⚠️ containerd 上没有 $N8N_IMAGE 镜像"
+  echo "可选操作："
+  echo "1) 离线导入: sudo ctr -n k8s.io image import n8n_2.8.2.tar"
+  echo "2) 联网拉取: sudo ctr -n k8s.io image pull docker.io/n8nio/n8n:2.8.2"
+  exit 1
+else
+  echo "✅ containerd 上已存在镜像: $N8N_IMAGE"
+fi
 
 # ---------- Step 1: 检测 StorageClass ----------
 echo "=== Step 1: 检测 StorageClass ==="
