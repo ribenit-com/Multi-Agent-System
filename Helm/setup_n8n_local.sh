@@ -23,13 +23,11 @@ echo "=== Step 0: 清理已有 PVC/PV ==="
 kubectl delete pvc -n $NAMESPACE -l app=$APP_LABEL --ignore-not-found --wait=false || true
 kubectl get pv -o name | grep n8n-pv- | xargs -r kubectl delete --ignore-not-found --wait=false || true
 
-# ---------- Step 0.5: 检查 containerd 镜像 ----------
+# ---------- Step 0.5: 检查 containerd 镜像（离线/本地镜像） ----------
 echo "=== Step 0.5: 检查 containerd 镜像 ==="
 if ! sudo ctr -n k8s.io images ls | grep -q "${N8N_IMAGE}"; then
-  echo "⚠️ containerd 上没有 $N8N_IMAGE 镜像"
-  echo "可选操作："
-  echo "1) 离线导入: sudo ctr -n k8s.io image import n8n_2.8.2.tar"
-  echo "2) 联网拉取: sudo ctr -n k8s.io image pull docker.io/n8nio/n8n:2.8.2"
+  echo "⚠️ containerd 上没有 $N8N_IMAGE 镜像，请确保已手动导入离线镜像"
+  echo "导入命令示例: sudo ctr -n k8s.io image import n8n_2.8.2.tar"
   exit 1
 else
   echo "✅ containerd 上已存在镜像: $N8N_IMAGE"
