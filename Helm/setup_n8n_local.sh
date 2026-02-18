@@ -2,8 +2,7 @@
 set -Eeuo pipefail
 
 # ===================================================
-# n8n HA 企业级一键部署 + HTML 交付页面
-# 带镜像可拉取检查 + PostgreSQL 初始化
+# n8n HA 企业级一键部署 + HTML 交付页面 + PostgreSQL 检测
 # ===================================================
 
 # ---------- 配置 ----------
@@ -21,7 +20,7 @@ POSTGRES_PASSWORD="mypassword"
 POSTGRES_DB_PREFIX="n8n"
 
 N8N_IMAGE="n8nio/n8n"
-N8N_TAG="2.224.0"
+N8N_TAG="2.224.0"   # 官方存在版本
 
 mkdir -p "$CHART_DIR/templates" "$LOG_DIR"
 
@@ -30,10 +29,10 @@ echo "=== Step 0: 清理已有 PVC/PV ==="
 kubectl delete pvc -n $NAMESPACE -l app=$APP_LABEL --ignore-not-found --wait=false || true
 kubectl get pv -o name | grep n8n-pv- | xargs -r kubectl delete --ignore-not-found --wait=false || true
 
-# ---------- Step 0.5: 检查镜像可拉取 ----------
-echo "=== Step 0.5: 检查 n8n 镜像是否可拉取 ==="
+# ---------- Step 0.5: 镜像可拉取检测 ----------
+echo "=== Step 0.5: 检查 n8n 官方镜像是否可拉取 ==="
 if ! docker pull ${N8N_IMAGE}:${N8N_TAG} >/dev/null 2>&1; then
-  echo "❌ 镜像 ${N8N_IMAGE}:${N8N_TAG} 无法拉取，请检查网络或镜像标签"
+  echo "❌ 官方镜像 ${N8N_IMAGE}:${N8N_TAG} 无法拉取，请检查网络"
   exit 1
 else
   echo "✅ 镜像可拉取：${N8N_IMAGE}:${N8N_TAG}"
@@ -56,7 +55,7 @@ name: n8n-ha-chart
 description: "n8n Helm Chart for HA production"
 type: application
 version: 1.0.0
-appVersion: "2.224.0"
+appVersion: "$N8N_TAG"
 EOF
 
 cat > "$CHART_DIR/values.yaml" <<EOF
@@ -129,7 +128,6 @@ for i in {1..60}; do
       echo "✅ StatefulSet n8n 已就绪"
       break
     fi
-    # 检查 Pod 是否有 ErrImagePull
     ERRPOD=$(kubectl -n $NAMESPACE get pods -l app=$APP_LABEL -o jsonpath='{.items[?(@.status.containerStatuses[*].state.waiting.reason=="ErrImagePull")].metadata.name}' || true)
     if [ -n "$ERRPOD" ]; then
       echo "❌ Pod 镜像拉取失败: $ERRPOD"
@@ -169,11 +167,10 @@ if [ -z "$DB_ERROR" ]; then
   fi
 fi
 
-# ---------- Step 5: 生成企业交付 HTML ----------
+# ---------- Step 5: 生成 HTML 报告 ----------
 echo "=== Step 5: 生成 HTML 页面 ==="
-PVC_LIST=$(kubectl -n $NAMESPACE get pvc -l app=$APP_LABEL -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
-REPLICA_COUNT=$(kubectl -n $NAMESPACE get sts n8n -o jsonpath='{.spec.replicas}' || echo "2")
 POD_STATUS=$(kubectl -n $NAMESPACE get pods -l app=$APP_LABEL -o custom-columns=NAME:.metadata.name,STATUS:.status.phase --no-headers || true)
+PVC_LIST=$(kubectl -n $NAMESPACE get pvc -l app=$APP_LABEL -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
 
 cat > "$HTML_FILE" <<EOF
 <!DOCTYPE html>
@@ -181,10 +178,11 @@ cat > "$HTML_FILE" <<EOF
 <head>
 <meta charset="UTF-8">
 <title>n8n HA 企业交付指南</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
 body {margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f5f7fa}
 .container {display:flex;justify-content:center;align-items:flex-start;padding:30px}
-.card {background:#fff;padding:30px 40px;border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.08);width:700px}
+.card {background:#fff;padding:30px 40px;border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.08);width:650px}
 h2 {color:#1677ff;margin-bottom:20px;text-align:center}
 h3 {color:#444;margin-top:25px;margin-bottom:10px;border-bottom:1px solid #eee;padding-bottom:5px}
 pre {background:#f0f2f5;padding:12px;border-radius:6px;overflow-x:auto;font-family:monospace}
@@ -203,15 +201,12 @@ pre {background:#f0f2f5;padding:12px;border-radius:6px;overflow-x:auto;font-fami
 <h2>🎉 n8n HA 安装完成</h2>
 
 <h3>数据库信息</h3>
-<div class="info"><span class="label">Namespace:</span><span class="value">$NAMESPACE</span></div>
-<div class="info"><span class="label">Service:</span><span class="value">n8n</span></div>
-<div class="info"><span class="label">PostgreSQL:</span><span class="value">$DB_HOST</span></div>
+<div class="info"><span class="label">PostgreSQL:</span><span class="value">$POSTGRES_SERVICE.$POSTGRES_NAMESPACE</span></div>
 <div class="info"><span class="label">用户名:</span><span class="value">$POSTGRES_USER</span></div>
 <div class="info"><span class="label">密码:</span><span class="value">$POSTGRES_PASSWORD</span></div>
 <div class="info"><span class="label">数据库:</span><span class="value">$DB_NAME</span></div>
-<div class="info"><span class="label">副本数:</span><span class="value">$REPLICA_COUNT</span></div>
-<div class="info"><span class="label">初始化状态:</span><span class="value">$DB_INIT_STATUS</span></div>
-<div class="info"><span class="label">错误信息:</span><span class="value">$DB_ERROR</span></div>
+<div class="info"><span class="label">副本数:</span><span class="value">2</span></div>
+<div class="info"><span class="label">数据库初始化:</span><span class="value">$DB_INIT_STATUS</span></div>
 
 <h3>PVC 列表</h3>
 <pre>$PVC_LIST</pre>
@@ -239,9 +234,10 @@ kubectl -n $NAMESPACE port-forward svc/n8n 5678:5678
 
 <h3>Python 示例</h3>
 <pre>
+# 安装依赖: pip install psycopg2-binary
 import psycopg2
 conn = psycopg2.connect(
-    host="$DB_HOST",
+    host="$POSTGRES_SERVICE.$POSTGRES_NAMESPACE.svc.cluster.local",
     database="$DB_NAME",
     user="$POSTGRES_USER",
     password="$POSTGRES_PASSWORD"
@@ -253,7 +249,7 @@ print(cur.fetchone())
 
 <h3>Java 示例</h3>
 <pre>
-String url = "jdbc:postgresql://$DB_HOST:5432/$DB_NAME";
+String url = "jdbc:postgresql://$POSTGRES_SERVICE.$POSTGRES_NAMESPACE.svc.cluster.local:5432/$DB_NAME";
 Properties props = new Properties();
 props.setProperty("user","$POSTGRES_USER");
 props.setProperty("password","$POSTGRES_PASSWORD");
