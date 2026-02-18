@@ -30,8 +30,8 @@ kubectl delete pvc -n $NAMESPACE -l app=$APP_LABEL --ignore-not-found --wait=fal
 kubectl get pv -o name | grep n8n-pv- | xargs -r kubectl delete --ignore-not-found --wait=false || true
 
 # ---------- Step 0.5: 节点提前拉取 n8n 镜像，显示下载进度 ----------
-echo "=== Step 0.5: 在节点上提前拉取 n8n 镜像 ==="
-docker pull ${N8N_IMAGE}:${N8N_TAG}
+echo "=== Step 0.5: 在节点上提前拉取 n8n 镜像 (需要 sudo) ==="
+sudo docker pull ${N8N_IMAGE}:${N8N_TAG}
 
 # ---------- Step 1: 检测 StorageClass ----------
 echo "=== Step 1: 检测 StorageClass ==="
