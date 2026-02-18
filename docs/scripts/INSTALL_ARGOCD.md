@@ -73,3 +73,8 @@ curl -fsSL https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main
 
 ./install_argocd_enterprise.sh <HTTP_PORT> <HTTPS_PORT>
 
+访问地址: https://服务器IP:30100
+用户名: admin
+密码: xxxxxxxx
+
+
