@@ -92,4 +92,120 @@ sudo ./install_argocd_enterprise.sh 30099 30100
 访问地址: https://服务器IP:30100
 用户名: admin
 密码: xxxxxxxx
+🌐 部署完成后
+
+执行完成后终端会输出：
+
+访问地址: https://服务器IP:30100
+用户名: admin
+密码: xxxxxxxx
+
+
+成功页面生成路径：
+
+/mnt/truenas/argocd_success.html
+
+
+浏览器访问：
+
+https://<服务器IP>:30100
+
+
+⚠ 首次访问可能提示 HTTPS 证书警告，属于正常现象。
+
+🔁 幂等执行说明
+
+脚本支持重复执行：
+
+已安装 → 自动 upgrade
+
+namespace 存在 → 自动跳过
+
+repo 存在 → 自动跳过
+
+不会重复创建资源。
+
+🔥 Helm 自动安装机制
+
+如果系统未安装 Helm，脚本会：
+
+下载指定版本 Helm
+
+解压
+
+安装到 /usr/local/bin/helm
+
+赋予执行权限
+
+无需人工干预。
+
+🛡 防火墙说明
+
+脚本自动检测并开放端口：
+
+ufw
+
+firewalld
+
+开放端口包括：
+
+HTTP NodePort
+
+HTTPS NodePort
+
+❓ 常见问题
+1️⃣ kubectl 未安装
+
+检查：
+
+kubectl version
+
+2️⃣ Kubernetes 未运行
+
+检查：
+
+kubectl cluster-info
+
+3️⃣ 端口无法访问
+
+检查防火墙：
+
+sudo ufw status
+
+
+或：
+
+firewall-cmd --list-ports
+
+🗑 卸载方法
+helm uninstall argocd -n argocd
+kubectl delete ns argocd
+
+🏷 版本信息
+Enterprise v2.0.0
+🏁 总结
+
+本脚本适用于：
+
+企业标准化部署
+
+DevOps 环境初始化
+
+GitOps 平台搭建
+
+内部交付模板
+
+如需扩展版本：
+
+自动安装 K3s
+
+自动安装 Kubernetes
+
+支持 Ingress + 域名
+
+支持自动卸载
+
+支持离线部署
+
+可继续扩展为完整企业发布安装器。
 
