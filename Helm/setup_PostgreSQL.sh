@@ -130,11 +130,11 @@ EOF
 
 # -------------------- 2️⃣ 初始化或清理 Git 仓库 --------------------
 if [ -d ".git" ]; then
-  echo "⚡ 已存在 Git 仓库，清理 main 分支"
+  echo "⚡ Git 仓库已存在，安全清理 main 分支..."
   git checkout --orphan temp-clean
   git add .
   git commit -m "Clean main commit"
-  git branch -D $GIT_BRANCH
+  git branch -D $GIT_BRANCH 2>/dev/null || true
   git branch -m $GIT_BRANCH
 else
   echo "⚡ 初始化 Git 仓库"
