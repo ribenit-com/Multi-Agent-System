@@ -2,8 +2,7 @@
 set -e
 
 # --------------------------
-# 一键生成 PostgreSQL HA Helm Chart + ArgoCD Application
-# 自动生成 Helm Chart + ArgoCD Application YAML 并应用
+# 一键生成 PostgreSQL HA Helm Chart + ArgoCD Application + PV
 # --------------------------
 
 # 配置
@@ -11,11 +10,12 @@ CHART_DIR="$HOME/gitops/postgres-ha-chart"
 NAMESPACE="database"
 ARGO_APP="postgres-ha"
 GITHUB_REPO="ribenit-com/Multi-Agent-k8s-gitops-postgres"
+PVC_SIZE="10Gi"
 
 echo "=== Step 0: 检测集群 StorageClass ==="
 SC_NAME=$(kubectl get storageclass -o jsonpath='{.items[0].metadata.name}' || true)
 if [ -z "$SC_NAME" ]; then
-  echo "⚠️ 集群没有 StorageClass，将不指定 StorageClass"
+  echo "⚠️ 集群没有 StorageClass，将不指定 StorageClass，并创建手动 PV"
 else
   echo "✅ 检测到 StorageClass: $SC_NAME"
 fi
@@ -35,7 +35,7 @@ EOF
 
 echo "=== Step 3: 写入 values.yaml ==="
 cat > "$CHART_DIR/values.yaml" <<EOF
-replicaCount: 3
+replicaCount: 2
 
 image:
   registry: docker.m.daocloud.io
@@ -50,8 +50,8 @@ postgresql:
 
 persistence:
   enabled: true
-  size: 10Gi
-  storageClass: ${SC_NAME:-""}  # 如果为空，Helm 模板里不指定 StorageClass
+  size: $PVC_SIZE
+  storageClass: ${SC_NAME:-""}
 
 resources:
   requests:
@@ -148,7 +148,32 @@ spec:
     app: postgres
 EOF
 
-echo "=== Step 7: 应用 ArgoCD Application ==="
+# Step 7: 如果没有 StorageClass，自动创建 PV
+if [ -z "$SC_NAME" ]; then
+  echo "=== Step 7: 创建手动 PV ==="
+  for i in $(seq 0 1); do
+    PV_NAME="postgres-pv-$i"
+    NODE_NAME=$(kubectl get nodes -o jsonpath='{.items[0].metadata.name}')
+    mkdir -p /mnt/data/postgres-$i
+    cat > /tmp/$PV_NAME.yaml <<EOF
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: $PV_NAME
+spec:
+  capacity:
+    storage: $PVC_SIZE
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: /mnt/data/postgres-$i
+  persistentVolumeReclaimPolicy: Retain
+EOF
+    kubectl apply -f /tmp/$PV_NAME.yaml
+  done
+fi
+
+echo "=== Step 8: 应用 ArgoCD Application ==="
 kubectl apply -f - <<EOF
 apiVersion: argoproj.io/v1alpha1
 kind: Application
