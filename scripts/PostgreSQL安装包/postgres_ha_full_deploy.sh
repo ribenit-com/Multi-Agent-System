@@ -1,6 +1,6 @@
 #!/bin/bash
 # ===================================================
-# PostgreSQL HA 一键部署（改造版）
+# PostgreSQL HA 一键部署（完全自动化版）
 # 功能：
 #   - 下载脚本
 #   - 创建目录并修复权限
@@ -9,7 +9,7 @@
 
 set -e
 set -o pipefail
-set -x   # 打开调试输出，方便排查卡住问题
+set -x   # 打开调试输出
 
 # ------------------------------
 # 配置
@@ -30,12 +30,8 @@ YAML_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/
 # ------------------------------
 # 创建工作目录和输出目录
 # ------------------------------
-mkdir -p "$WORK_DIR"
-mkdir -p "$YAML_OUTPUT_DIR"
-mkdir -p "$HTML_OUTPUT_DIR"
-
+mkdir -p "$WORK_DIR" "$YAML_OUTPUT_DIR" "$HTML_OUTPUT_DIR"
 chmod 755 "$WORK_DIR" "$YAML_OUTPUT_DIR" "$HTML_OUTPUT_DIR"
-
 cd "$WORK_DIR"
 
 # ------------------------------
@@ -58,14 +54,13 @@ chmod +x *.sh
 # ------------------------------
 # 执行主控生成 JSON + HTML + YAML
 # ------------------------------
-echo "🔹 执行主控脚本生成报告和 YAML"
-
+echo "🔹 执行 JSON 检测"
 JSON_RESULT=$(bash ./check_postgres_names_json.sh)
 
-# 生成 HTML 报告
+echo "🔹 生成 HTML 报告"
 bash ./check_postgres_names_html.sh "$MODULE" "$JSON_RESULT"
 
-# 生成 GitOps YAML
+echo "🔹 生成 GitOps YAML"
 bash ./create_postgres_yaml.sh "$YAML_OUTPUT_DIR"
 
 echo ""
