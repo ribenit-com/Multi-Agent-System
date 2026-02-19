@@ -1,3 +1,9 @@
+
+sudo apt update
+sudo apt install -y postgresql-client
+需要单独安装的工具组：　
+postgresql-client
+
 # Moltbot - 餐饮业智能员工调度基盘
 
 ## 🌐 项目背景 (Project Background)
