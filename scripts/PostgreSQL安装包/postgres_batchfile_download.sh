@@ -1,50 +1,32 @@
 #!/bin/bash
 # ===================================================
-# 脚本名称: postgres_batchfile_download.sh
-# 功能:
-#   - 批量下载 GitHub PostgreSQL 脚本
-#   - 自动赋予可执行权限
+# PostgreSQL HA 脚本批量下载
+# 功能：
+#   1. 下载主控脚本
+#   2. 下载 JSON 检测脚本
+#   3. 下载 HTML 报告脚本
+#   4. 赋可执行权限
 # ===================================================
 
 set -e
 
-# ------------------------------
-# GitHub 仓库基础路径
-# ------------------------------
-GITHUB_BASE="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/"
+# 工作目录
+WORK_DIR=~/postgres_ha_scripts
+mkdir -p "$WORK_DIR"
+cd "$WORK_DIR"
 
-# ------------------------------
-# 下载目录（本地）
-# ------------------------------
-DOWNLOAD_DIR="${HOME}/postgres_scripts"
-mkdir -p "$DOWNLOAD_DIR"
+echo "⬇️ 下载 PostgreSQL HA 主控脚本"
+curl -fsSL "https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/PostgreSQL%E5%AE%89%E8%A3%85%E5%8C%85/postgres_control.sh" -o postgres_control.sh
 
-# ------------------------------
-# PostgreSQL 脚本列表
-# ------------------------------
-POSTGRES_SCRIPTS=(
-    "Helm/setup_PostgreSQL_local.sh"
-    "scripts/check_postgres_names_json.sh"
-    "scripts/check_postgres_names_html.sh"
-    "scripts/enterprise_master.sh"
-    # 这里可以继续添加其他 PostgreSQL 相关脚本路径
-)
+echo "⬇️ 下载 JSON 检测脚本"
+curl -fsSL "https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/PostgreSQL%E5%AE%89%E8%A3%85%E5%8C%85/check_postgres_names_json.sh" -o check_postgres_names_json.sh
 
-# ------------------------------
-# 批量下载
-# ------------------------------
-echo "🔹 开始下载 PostgreSQL 脚本到 $DOWNLOAD_DIR"
+echo "⬇️ 下载 HTML 报告脚本"
+curl -fsSL "https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/PostgreSQL%E5%AE%89%E8%A3%85%E5%8C%85/check_postgres_names_html.sh" -o check_postgres_names_html.sh
 
-for SCRIPT_PATH in "${POSTGRES_SCRIPTS[@]}"; do
-    FILE_NAME=$(basename "$SCRIPT_PATH")
-    DOWNLOAD_URL="${GITHUB_BASE}${SCRIPT_PATH}"
-    TARGET_FILE="$DOWNLOAD_DIR/$FILE_NAME"
+# 赋可执行权限
+chmod +x *.sh
 
-    echo "⬇️ 下载 $FILE_NAME ..."
-    curl -fsSL "$DOWNLOAD_URL" -o "$TARGET_FILE"
-
-    # 赋予可执行权限
-    chmod +x "$TARGET_FILE"
-done
-
-echo "✅ 所有 PostgreSQL 脚本下载完成，可执行文件在: $DOWNLOAD_DIR"
+echo "✅ PostgreSQL HA 脚本下载完成"
+echo "📁 脚本目录: $WORK_DIR"
+echo "可执行主控脚本: ./postgres_control.sh \"PostgreSQL_HA\" ./check_postgres_names_json.sh"
