@@ -1,15 +1,29 @@
 #!/bin/bash
 # ===================================================
-# HTML 报告生成脚本（PostgreSQL HA） - 优化版
-# 输入：JSON 数据（stdin 或文件）
+# HTML 报告生成脚本（PostgreSQL HA） - 修正版
+# 功能：接收 JSON（文件或 stdin），生成 HTML 报告
 # ===================================================
 
 set -e
 
-JSON_INPUT="$1"
-[ -z "$JSON_INPUT" ] && JSON_INPUT="/dev/stdin"
-JSON_DATA=$(cat "$JSON_INPUT")
+# -------------------------------
+# JSON 输入处理
+# -------------------------------
+if [ -t 0 ] && [ -z "$1" ]; then
+    echo "Usage: $0 <JSON_FILE> 或通过管道传入 JSON"
+    exit 1
+fi
 
+if [ -t 0 ]; then
+    JSON_INPUT="$1"
+    JSON_DATA=$(cat "$JSON_INPUT")
+else
+    JSON_DATA=$(cat)   # 从管道读取
+fi
+
+# -------------------------------
+# 输出目录和文件
+# -------------------------------
 BASE_DIR="/mnt/truenas"
 REPORT_DIR="$BASE_DIR/PostgreSQL安装报告书"
 mkdir -p "$REPORT_DIR"
@@ -84,4 +98,10 @@ cat >> "$HTML_FILE" <<EOF
 </html>
 EOF
 
-ln -sf "$(basename "$HTML_FILE")" "$LATEST_
+# -------------------------------
+# 创建最新报告软链接
+# -------------------------------
+ln -sf "$(basename "$HTML_FILE")" "$LATEST_FILE"
+
+echo "✅ HTML 报告生成完成: $HTML_FILE"
+echo "🔗 最新报告链接: $LATEST_FILE"
