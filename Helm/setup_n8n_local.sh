@@ -26,7 +26,7 @@ HTML_FILE="$LOG_DIR/n8n-ha-delivery.html"
 trap 'echo; echo "[FATAL] 第 $LINENO 行执行失败"; exit 1' ERR
 
 echo "================================================="
-echo "🚀 n8n HA 企业级 GitOps 自愈部署 v12.4 (Image Auto-Fix + DB Verified)"
+echo "🚀 n8n HA 企业级 GitOps 自愈部署 v12.5 (Image Auto-Fix + DB Verified)"
 echo "================================================="
 
 ############################################
@@ -36,12 +36,12 @@ echo "[CHECK] Kubernetes API"
 kubectl version --client >/dev/null 2>&1 || kubectl version >/dev/null 2>&1 || true
 
 ############################################
-# 1️⃣ containerd 镜像检查（自动导入或拉取）
+# 1️⃣ containerd 镜像检查（本地存在优先，不 pull）
 ############################################
 echo "[CHECK] containerd 镜像"
 
 # 只保留镜像名和 tag，忽略 registry 前缀
-IMAGE_NAME_ONLY="${IMAGE##*/}"   # 例如 n8n:2.8.2
+IMAGE_NAME_ONLY="${IMAGE##*/}"   # n8n:2.8.2
 
 # 检查镜像是否已经存在
 if sudo ctr -n k8s.io images list 2>/dev/null | grep -q "$IMAGE_NAME_ONLY"; then
@@ -56,13 +56,7 @@ else
         fi
         echo "[OK] 镜像导入完成"
     else
-        echo "[INFO] 本地 tar 不存在，尝试直接 pull 镜像 $IMAGE ..."
-        if sudo ctr -n k8s.io images pull "$IMAGE"; then
-            echo "[OK] 镜像拉取成功"
-        else
-            echo "[ERROR] 镜像拉取失败，请检查网络或镜像名称"
-            exit 1
-        fi
+        echo "[WARN] 本地 tar 不存在，镜像无法拉取（避免 DNS 错误），请手动准备 $TAR_FILE 或确保网络可访问 docker.io"
     fi
 fi
 
@@ -203,7 +197,7 @@ pre{background:#f1f3f5;padding:14px;border-radius:8px}
 <body>
 <div class="container">
 <div class="card">
-<h2>🚀 n8n HA 企业级交付报告 v12.4</h2>
+<h2>🚀 n8n HA 企业级交付报告 v12.5</h2>
 
 <h3>部署信息</h3>
 <p>Namespace: $NAMESPACE</p>
@@ -253,4 +247,4 @@ echo
 echo "📄 企业交付报告生成完成:"
 echo "👉 $HTML_FILE"
 echo
-echo "🎉 v12.4 Image Auto-Fix + DB Verified 执行完成"
+echo "🎉 v12.5 Image Auto-Fix + DB Verified 执行完成"
