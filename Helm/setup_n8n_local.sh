@@ -26,7 +26,7 @@ HTML_FILE="$LOG_DIR/n8n-ha-delivery.html"
 trap 'echo; echo "[FATAL] 第 $LINENO 行执行失败"; exit 1' ERR
 
 echo "================================================="
-echo "🚀 n8n HA 本地部署自容脚本 v2.0 (本地镜像 + ArgoCD + 健康检查 + HTML 报告)"
+echo "🚀 n8n HA 完整本地部署自容脚本 v3.0 (YAML生成 + ArgoCD + 健康检查 + HTML报告)"
 echo "================================================="
 
 ############################################
@@ -58,16 +58,152 @@ else
 fi
 
 ############################################
-# 2️⃣ Namespace 创建
+# 2️⃣ 生成 GitOps YAML
 ############################################
-kubectl get ns "$NAMESPACE" >/dev/null 2>&1 || kubectl create ns "$NAMESPACE" >/dev/null 2>&1 || true
+echo "[GENERATE] 生成 GitOps YAML 文件: $GITOPS_DIR"
+mkdir -p "$GITOPS_DIR"
+
+# namespace.yaml
+cat > "$GITOPS_DIR/namespace.yaml" <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: $NAMESPACE
+EOF
+
+# secret.yaml
+cat > "$GITOPS_DIR/secret.yaml" <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-secret
+  namespace: $NAMESPACE
+type: Opaque
+stringData:
+  password: $DB_PASS
+EOF
+
+# statefulset.yaml
+cat > "$GITOPS_DIR/statefulset.yaml" <<EOF
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: $APP_NAME
+  namespace: $NAMESPACE
+spec:
+  serviceName: $APP_NAME
+  replicas: 2
+  selector:
+    matchLabels:
+      app: $APP_NAME
+  template:
+    metadata:
+      labels:
+        app: $APP_NAME
+    spec:
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:15
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h $DB_SERVICE.$DB_NAMESPACE.svc.cluster.local -p 5432; do
+                echo "Waiting for Postgres..."
+                sleep 3
+              done
+      containers:
+        - name: $APP_NAME
+          image: $IMAGE
+          ports:
+            - containerPort: 5678
+          env:
+            - name: DB_TYPE
+              value: postgresdb
+            - name: DB_POSTGRESDB_HOST
+              value: $DB_SERVICE.$DB_NAMESPACE.svc.cluster.local
+            - name: DB_POSTGRESDB_PORT
+              value: "5432"
+            - name: DB_POSTGRESDB_DATABASE
+              value: $DB_NAME
+            - name: DB_POSTGRESDB_USER
+              value: $DB_USER
+            - name: DB_POSTGRESDB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: password
+            - name: EXECUTIONS_MODE
+              value: regular
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 5678
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 5678
+            initialDelaySeconds: 60
+            periodSeconds: 20
+          volumeMounts:
+            - name: data
+              mountPath: /home/node/.n8n
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
+EOF
+
+# service.yaml
+cat > "$GITOPS_DIR/service.yaml" <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: $APP_NAME
+  namespace: $NAMESPACE
+spec:
+  selector:
+    app: $APP_NAME
+  ports:
+    - port: 5678
+      targetPort: 5678
+  type: ClusterIP
+EOF
+
+# ingress.yaml
+cat > "$GITOPS_DIR/ingress.yaml" <<EOF
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: $APP_NAME
+  namespace: $NAMESPACE
+spec:
+  rules:
+    - host: n8n.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: $APP_NAME
+                port:
+                  number: 5678
+EOF
+
+echo "[OK] YAML 文件生成完成"
 
 ############################################
-# 3️⃣ 本地安装 n8n YAML
+# 3️⃣ 本地安装 YAML
 ############################################
-echo "[INSTALL] 本地 kubectl apply 安装 n8n"
 kubectl apply -f "$GITOPS_DIR/" || true
-echo "[OK] GitOps YAML 文件已应用: $GITOPS_DIR"
+echo "[OK] GitOps YAML 已应用"
 
 ############################################
 # 4️⃣ ArgoCD Application 创建
@@ -106,8 +242,8 @@ SLEEP_INTERVAL=5
 ELAPSED=0
 
 while true; do
-  READY_COUNT=$(kubectl get pods -n "$NAMESPACE" -l app=n8n --no-headers 2>/dev/null | grep -c "Running")
-  TOTAL_COUNT=$(kubectl get pods -n "$NAMESPACE" -l app=n8n --no-headers 2>/dev/null | wc -l)
+  READY_COUNT=$(kubectl get pods -n "$NAMESPACE" -l app=$APP_NAME --no-headers 2>/dev/null | grep -c "Running")
+  TOTAL_COUNT=$(kubectl get pods -n "$NAMESPACE" -l app=$APP_NAME --no-headers 2>/dev/null | wc -l)
 
   if [[ "$TOTAL_COUNT" -gt 0 && "$READY_COUNT" -eq "$TOTAL_COUNT" ]]; then
       echo "[OK] 所有 n8n Pod 已就绪 ($READY_COUNT/$TOTAL_COUNT)"
@@ -124,10 +260,10 @@ while true; do
 done
 
 ############################################
-# 6️⃣ 服务端口可访问检查
+# 6️⃣ 服务端口访问检查
 ############################################
-SERVICE_IP=$(kubectl get svc -n "$NAMESPACE" n8n -o jsonpath='{.spec.clusterIP}')
-SERVICE_PORT=$(kubectl get svc -n "$NAMESPACE" n8n -o jsonpath='{.spec.ports[0].port}')
+SERVICE_IP=$(kubectl get svc -n "$NAMESPACE" $APP_NAME -o jsonpath='{.spec.clusterIP}')
+SERVICE_PORT=$(kubectl get svc -n "$NAMESPACE" $APP_NAME -o jsonpath='{.spec.ports[0].port}')
 
 echo "[CHECK] 服务端口访问..."
 if nc -z -w 5 "$SERVICE_IP" "$SERVICE_PORT"; then
