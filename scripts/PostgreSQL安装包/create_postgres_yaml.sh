@@ -1,183 +1,114 @@
 #!/bin/bash
 # ===================================================
-# 脚本名称: generate_postgres_ha_yaml.sh
-# 功能: 根据检测 JSON 生成 PostgreSQL HA GitOps YAML 文件
-#       - 可配置副本数 & StorageClass
-#       - 从 stdin 读取 JSON
-#       - 输出目录直接可用于 ArgoCD/GitOps
+# PostgreSQL HA GitOps YAML 生成脚本（SC + PVC）
+# 功能：
+#   - 根据 JSON 生成 StatefulSet、Service、PVC YAML
+#   - 不依赖宿主机目录
+#   - 使用指定 StorageClass 动态 PV
 # ===================================================
 
-set -e
+set -euo pipefail
 
 # -----------------------------
-# 参数设置
+# 配置参数
 # -----------------------------
-REPLICA_COUNT="${1:-3}"                # 副本数，默认3
-STORAGE_CLASS="${2:-}"                 # StorageClass，可为空
-OUTPUT_DIR="${OUTPUT_DIR:-./gitops/postgres-ha}"  # 输出目录
-POSTGRES_USER="${POSTGRES_USER:-myuser}"
-POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-mypassword}"
-POSTGRES_DB="${POSTGRES_DB:-mydb}"
+MODULE="${1:-PostgreSQL_HA}"           # 模块名
+WORK_DIR="${2:-$HOME/postgres_ha_scripts/gitops/postgres-ha}"
+STORAGE_CLASS_NAME="${3:-sc-ssd-high}" # SC 名称
+PVC_SIZE="${4:-5Gi}"                   # PVC 容量
+NAMESPACE="ns-postgres-ha"
+APP_LABEL="postgres-ha"
+STATEFULSET_NAME="sts-postgres-ha"
+SERVICE_PRIMARY="svc-postgres-primary"
+SERVICE_REPLICA="svc-postgres-replica"
+
+mkdir -p "$WORK_DIR"
 
 # -----------------------------
-# 从 stdin 读取 JSON
+# 生成 PVC YAML（动态 PV）
 # -----------------------------
-INPUT_JSON=$(cat)
-
-# -----------------------------
-# 提取资源信息
-# -----------------------------
-NAMESPACE=$(echo "$INPUT_JSON" | jq -r '.[] | select(.resource_type=="Namespace") | .name')
-STATEFULSET=$(echo "$INPUT_JSON" | jq -r '.[] | select(.resource_type=="StatefulSet") | .name')
-SERVICE_PRIMARY=$(echo "$INPUT_JSON" | jq -r '.[] | select(.resource_type=="Service") | select(.name|test("primary")) | .name')
-SERVICE_REPLICA=$(echo "$INPUT_JSON" | jq -r '.[] | select(.resource_type=="Service") | select(.name|test("replica")) | .name')
-
-# PVC 列表
-readarray -t PVC_NAMES <<< "$(echo "$INPUT_JSON" | jq -r '.[] | select(.resource_type=="PVC") | .name')"
-
-# -----------------------------
-# 创建输出目录
-# -----------------------------
-mkdir -p "$OUTPUT_DIR"
-
-# -----------------------------
-# 生成 Namespace YAML
-# -----------------------------
-cat > "$OUTPUT_DIR/namespace.yaml" <<EOF
+cat <<EOF > "$WORK_DIR/${MODULE}_pvc.yaml"
 apiVersion: v1
-kind: Namespace
+kind: PersistentVolumeClaim
 metadata:
-  name: $NAMESPACE
+  name: pvc-postgres-ha-0
+  namespace: $NAMESPACE
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: $PVC_SIZE
+  storageClassName: $STORAGE_CLASS_NAME
 EOF
 
 # -----------------------------
 # 生成 StatefulSet YAML
 # -----------------------------
-cat > "$OUTPUT_DIR/statefulset.yaml" <<EOF
+cat <<EOF > "$WORK_DIR/${MODULE}_statefulset.yaml"
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: $STATEFULSET
+  name: $STATEFULSET_NAME
   namespace: $NAMESPACE
-  labels:
-    app: postgres-ha
 spec:
-  serviceName: $SERVICE_REPLICA
-  replicas: $REPLICA_COUNT
+  serviceName: $SERVICE_PRIMARY
+  replicas: 1
   selector:
     matchLabels:
-      app: postgres-ha
+      app: $APP_LABEL
   template:
     metadata:
       labels:
-        app: postgres-ha
+        app: $APP_LABEL
     spec:
       containers:
-        - name: postgres
-          image: "docker.m.daocloud.io/library/postgres:16.3"
-          imagePullPolicy: IfNotPresent
-          env:
-            - name: POSTGRES_USER
-              value: "$POSTGRES_USER"
-            - name: POSTGRES_PASSWORD
-              value: "$POSTGRES_PASSWORD"
-            - name: POSTGRES_DB
-              value: "$POSTGRES_DB"
-          ports:
-            - containerPort: 5432
-              name: postgres
-          volumeMounts:
-EOF
-
-for pvc in "${PVC_NAMES[@]}"; do
-cat >> "$OUTPUT_DIR/statefulset.yaml" <<EOF
-            - name: $pvc
-              mountPath: /var/lib/postgresql/data
-EOF
-done
-
-cat >> "$OUTPUT_DIR/statefulset.yaml" <<EOF
+      - name: postgres
+        image: postgres:15
+        ports:
+        - containerPort: 5432
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/postgresql/data
   volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: $PVC_SIZE
+      storageClassName: $STORAGE_CLASS_NAME
 EOF
 
-for pvc in "${PVC_NAMES[@]}"; do
-cat >> "$OUTPUT_DIR/statefulset.yaml" <<EOF
-    - metadata:
-        name: $pvc
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        resources:
-          requests:
-            storage: 5Gi
-EOF
-if [ -n "$STORAGE_CLASS" ]; then
-cat >> "$OUTPUT_DIR/statefulset.yaml" <<EOF
-        storageClassName: $STORAGE_CLASS
-EOF
-fi
-done
-
 # -----------------------------
-# 生成主库 Service YAML
+# 生成 Service YAML
 # -----------------------------
-cat > "$OUTPUT_DIR/service-primary.yaml" <<EOF
+cat <<EOF > "$WORK_DIR/${MODULE}_service.yaml"
 apiVersion: v1
 kind: Service
 metadata:
   name: $SERVICE_PRIMARY
   namespace: $NAMESPACE
 spec:
-  type: ClusterIP
   selector:
-    app: postgres-ha
+    app: $APP_LABEL
   ports:
     - port: 5432
-      targetPort: 5432
-      name: postgres
-EOF
-
-# -----------------------------
-# 生成副本 Headless Service YAML
-# -----------------------------
-cat > "$OUTPUT_DIR/service-replica.yaml" <<EOF
+---
 apiVersion: v1
 kind: Service
 metadata:
   name: $SERVICE_REPLICA
   namespace: $NAMESPACE
 spec:
-  clusterIP: None
   selector:
-    app: postgres-ha
+    app: $APP_LABEL
   ports:
     - port: 5432
-      targetPort: 5432
-      name: postgres
 EOF
 
-# -----------------------------
-# 生成手动 PV（如果没有 StorageClass）
-# -----------------------------
-if [ -z "$STORAGE_CLASS" ]; then
-  echo "=== 生成手动 PV ==="
-  for i in $(seq 0 $(($REPLICA_COUNT-1))); do
-    PV_NAME="postgres-pv-$i"
-    mkdir -p /mnt/data/postgres-$i
-    cat > "$OUTPUT_DIR/$PV_NAME.yaml" <<EOF
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: $PV_NAME
-spec:
-  capacity:
-    storage: 5Gi
-  accessModes:
-    - ReadWriteOnce
-  hostPath:
-    path: /mnt/data/postgres-$i
-  persistentVolumeReclaimPolicy: Retain
-EOF
-  done
-fi
-
-echo "✅ PostgreSQL HA GitOps YAML 已生成在 $OUTPUT_DIR"
+echo "✅ PostgreSQL HA YAML 已生成到 $WORK_DIR"
+echo "📦 PVC YAML: ${MODULE}_pvc.yaml"
+echo "📦 StatefulSet YAML: ${MODULE}_statefulset.yaml"
+echo "📦 Service YAML: ${MODULE}_service.yaml"
