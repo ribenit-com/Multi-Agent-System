@@ -1,6 +1,14 @@
 # PostgreSQL HA 企业级清理与规范化 PVC 初始化脚本说明
 
-##　使用方法：　./enterprise_master.sh PostgreSQL_HA ./check_postgres_names_json.sh
+##　使用方法：　
+```　curl -fsSL https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/PostgreSQL%E5%AE%89%E8%A3%85%E5%8C%85/postgres_batchfile_download.sh -o postgres_batchfile_download.sh
+chmod +x postgres_batchfile_download.sh
+./postgres_batchfile_download.sh　```
+
+```
+　入口脚本执行：./postgres_control.sh "PostgreSQL_HA" ./check_postgres_names_json.sh
+```
+
 
 
 ## 脚本概述
