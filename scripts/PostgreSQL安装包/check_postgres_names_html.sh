@@ -1,19 +1,34 @@
 #!/bin/bash
 # ===================================================
-# check_postgres_names_html.sh v1.2 修正版
+# check_postgres_names_html.sh v1.3 单独执行版
 # 功能：
 #   - 生成 HTML 报告
+#   - 支持传入 JSON 参数或指定 JSON 文件
 # 参数：
 #   $1 = 模块名（例如 PostgreSQL_HA）
-#   $2 = JSON 内容（由 check_postgres_names_json.sh 输出）
+#   $2 = JSON 内容 或 JSON 文件路径（可选，如果为空，则从 stdin 读取）
 # ===================================================
 
 MODULE="$1"
-JSON_RESULT="$2"
+INPUT="$2"
 
-if [[ -z "$MODULE" || -z "$JSON_RESULT" ]]; then
-    echo "Usage: $0 <模块名> <JSON内容>"
+# 检查模块名
+if [[ -z "$MODULE" ]]; then
+    echo "Usage: $0 <模块名> [JSON内容或JSON文件路径]"
     exit 1
+fi
+
+# 判断输入来源
+if [[ -z "$INPUT" ]]; then
+    # 从标准输入读取 JSON
+    echo "ℹ️ 从标准输入读取 JSON..."
+    JSON_RESULT=$(cat)
+elif [[ -f "$INPUT" ]]; then
+    # 如果是文件路径
+    JSON_RESULT=$(cat "$INPUT")
+else
+    # 直接当作 JSON 内容
+    JSON_RESULT="$INPUT"
 fi
 
 # 设置 HTML 输出目录
