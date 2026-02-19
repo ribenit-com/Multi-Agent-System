@@ -2,142 +2,76 @@
 set -Eeuo pipefail
 
 # ===================================================
-# n8n HA 企业级部署脚本 v5
-# 自诊断 + 自动更新 + 离线支持 + HTML交付
+# n8n HA 企业级部署脚本 v7
+# 自适应：Helm / ArgoCD
+# 离线镜像支持 + GitOps支持 + 诊断增强
 # ===================================================
 
-SCRIPT_VERSION="5.0.0"
-SCRIPT_NAME="setup_n8n_local.sh"
-SCRIPT_REPO="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/Helm"
+SCRIPT_VERSION="7.0.0"
 
 CHART_DIR="$HOME/gitops/n8n-ha-chart"
+GIT_ROOT="$HOME/gitops"
 NAMESPACE="automation"
 PVC_SIZE="10Gi"
 APP_LABEL="n8n"
-LOG_DIR="/mnt/truenas"
-HTML_FILE="${LOG_DIR}/n8n_ha_info.html"
+ARGO_APP_NAME="n8n-ha"
 N8N_IMAGE="docker.io/n8nio/n8n:2.8.2"
 TAR_FILE="$CHART_DIR/n8n_2.8.2.tar"
 
-mkdir -p "$CHART_DIR/templates" "$LOG_DIR"
-
-# ===================================================
-# 自动版本检测
-# ===================================================
-
-check_for_update() {
-  echo "[CHECK] 检查脚本更新..."
-
-  REMOTE_VERSION=$(curl -fsSL "${SCRIPT_REPO}/${SCRIPT_NAME}" 2>/dev/null | \
-    grep 'SCRIPT_VERSION=' | head -n1 | cut -d'"' -f2)
-
-  if [ -z "$REMOTE_VERSION" ]; then
-    echo "⚠ 无法检测远程版本（可能离线环境）"
-    return
-  fi
-
-  if [ "$REMOTE_VERSION" != "$SCRIPT_VERSION" ]; then
-    echo "⚠ 发现新版本: $REMOTE_VERSION (当前: $SCRIPT_VERSION)"
-    echo "🔄 自动升级脚本..."
-
-    curl -fsSL "${SCRIPT_REPO}/${SCRIPT_NAME}" -o "$SCRIPT_NAME" || {
-      echo "❌ 升级失败"
-      exit 1
-    }
-
-    chmod +x "$SCRIPT_NAME"
-    echo "✅ 升级完成，重新执行..."
-    exec ./"$SCRIPT_NAME"
-    exit 0
-  else
-    echo "✅ 当前已是最新版本 ($SCRIPT_VERSION)"
-  fi
-}
-
-check_for_update
-
-echo "========================================="
+echo "=================================================="
 echo "🚀 n8n HA 企业级部署启动 (v$SCRIPT_VERSION)"
-echo "========================================="
+echo "=================================================="
 
 # ===================================================
-# 自诊断阶段
+# 基础检查
 # ===================================================
 
 echo "[CHECK] Kubernetes API"
-kubectl cluster-info >/dev/null 2>&1 || {
-  echo "❌ Kubernetes API 不可达"
-  exit 1
-}
-
-echo "[CHECK] Node Ready 状态"
-NOT_READY=$(kubectl get nodes --no-headers | awk '$2!="Ready" {print $1}')
-if [ -n "$NOT_READY" ]; then
-  echo "❌ 以下节点未 Ready:"
-  echo "$NOT_READY"
-  exit 1
-else
-  echo "✅ 所有节点 Ready"
-fi
+kubectl cluster-info >/dev/null || { echo "❌ K8s API 不可达"; exit 1; }
 
 echo "[CHECK] containerd"
-systemctl is-active --quiet containerd || {
-  echo "❌ containerd 未运行"
-  exit 1
-}
+systemctl is-active --quiet containerd || { echo "❌ containerd 未运行"; exit 1; }
 
 echo "[CHECK] Helm"
-helm version >/dev/null 2>&1 || {
-  echo "❌ Helm 未安装"
-  exit 1
-}
+helm version >/dev/null 2>&1 || echo "⚠ Helm 未安装（若走 ArgoCD 可忽略）"
 
 # ===================================================
-# 清理旧资源
+# 检查 ArgoCD
 # ===================================================
 
-echo "[INFO] 清理旧 PVC/PV"
-kubectl delete pvc -n $NAMESPACE -l app=$APP_LABEL --ignore-not-found --wait=false || true
-kubectl get pv -o name | grep n8n-pv- | xargs -r kubectl delete --ignore-not-found --wait=false || true
+ARGO_MODE=false
 
-# ===================================================
-# 镜像检查 / 离线导入
-# ===================================================
-
-echo "[INFO] 检查 containerd 镜像"
-
-if sudo ctr -n k8s.io images list | awk '{print $1}' | grep -q "^${N8N_IMAGE}$"; then
-  echo "✅ 镜像已存在"
-else
-  if [ -f "$TAR_FILE" ]; then
-    echo "⚠ 未发现镜像，开始导入..."
-    START_TIME=$(date +%s)
-    sudo ctr -n k8s.io image import "$TAR_FILE" >/dev/null 2>&1 &
-    PID=$!
-    while kill -0 $PID 2>/dev/null; do
-      ELAPSED=$(( $(date +%s) - START_TIME ))
-      printf "\r   ⏳ 导入中... %ds" "$ELAPSED"
-      sleep 2
-    done
-    wait $PID
-    echo ""
-    echo "✅ 镜像导入完成"
-  else
-    echo "❌ 未找到镜像 tar 文件: $TAR_FILE"
-    exit 1
+if kubectl get ns argocd >/dev/null 2>&1; then
+  if kubectl -n argocd get applications.argoproj.io >/dev/null 2>&1; then
+    ARGO_MODE=true
   fi
 fi
 
-# ===================================================
-# StorageClass
-# ===================================================
-
-SC_NAME=$(kubectl get storageclass -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
-
-if [ -z "$SC_NAME" ]; then
-  echo "⚠ 未检测到 StorageClass"
+if [ "$ARGO_MODE" = true ]; then
+  echo "✅ 检测到 ArgoCD，进入 GitOps 模式"
 else
-  echo "✅ StorageClass: $SC_NAME"
+  echo "ℹ 未检测到 ArgoCD，进入 Helm 直装模式"
+fi
+
+# ===================================================
+# 镜像检查
+# ===================================================
+
+echo "[CHECK] containerd 镜像"
+
+if sudo ctr -n k8s.io images list | awk '{print $1}' | grep -q "^${N8N_IMAGE}$"; then
+  echo "✅ 镜像存在"
+else
+  if [ -f "$TAR_FILE" ]; then
+    echo "⚠ 导入离线镜像..."
+    START=$(date +%s)
+    sudo ctr -n k8s.io image import "$TAR_FILE"
+    END=$(date +%s)
+    echo "✅ 导入完成 ($(($END-$START)) 秒)"
+  else
+    echo "❌ 未找到镜像: $TAR_FILE"
+    exit 1
+  fi
 fi
 
 # ===================================================
@@ -145,6 +79,10 @@ fi
 # ===================================================
 
 echo "[INFO] 生成 Helm Chart"
+
+mkdir -p "$CHART_DIR/templates"
+
+SC_NAME=$(kubectl get storageclass -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
 
 cat > "$CHART_DIR/Chart.yaml" <<EOF
 apiVersion: v2
@@ -159,7 +97,7 @@ echo "*.tar" > "$CHART_DIR/.helmignore"
 cat > "$CHART_DIR/values.yaml" <<EOF
 replicaCount: 2
 image:
-  repository: n8nio/n8n
+  repository: docker.io/n8nio/n8n
   tag: "2.8.2"
   pullPolicy: Never
 persistence:
@@ -218,55 +156,72 @@ spec:
 EOF
 
 # ===================================================
-# 安装 / 升级
+# 部署逻辑
 # ===================================================
 
 kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
 
-if helm status n8n-ha -n $NAMESPACE >/dev/null 2>&1; then
-  helm upgrade n8n-ha "$CHART_DIR" -n $NAMESPACE
+if [ "$ARGO_MODE" = true ]; then
+
+  echo "[GITOPS] 提交到仓库"
+
+  cd "$GIT_ROOT"
+  git add n8n-ha-chart
+
+  if git diff --cached --quiet; then
+    echo "ℹ 无变更"
+  else
+    git commit -m "feat: update n8n-ha-chart $(date +%F-%T)"
+    git push origin main
+    echo "✅ 已推送 GitOps"
+  fi
+
+  echo "[GITOPS] 等待 ArgoCD 同步"
+
+  for i in {1..60}; do
+    SYNC=$(kubectl -n argocd get applications.argoproj.io $ARGO_APP_NAME -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "Unknown")
+    HEALTH=$(kubectl -n argocd get applications.argoproj.io $ARGO_APP_NAME -o jsonpath='{.status.health.status}' 2>/dev/null || echo "Unknown")
+    echo "   Sync: $SYNC | Health: $HEALTH"
+    if [ "$SYNC" == "Synced" ] && [ "$HEALTH" == "Healthy" ]; then
+      break
+    fi
+    sleep 5
+  done
+
 else
-  helm install n8n-ha "$CHART_DIR" -n $NAMESPACE
+
+  echo "[HELM] 直接部署"
+
+  if helm status n8n-ha -n $NAMESPACE >/dev/null 2>&1; then
+    helm upgrade n8n-ha "$CHART_DIR" -n $NAMESPACE
+  else
+    helm install n8n-ha "$CHART_DIR" -n $NAMESPACE
+  fi
+
 fi
 
 # ===================================================
-# 等待 StatefulSet
+# 等待就绪
 # ===================================================
 
 echo "[INFO] 等待 StatefulSet 就绪"
+
 for i in {1..60}; do
   READY=$(kubectl -n $NAMESPACE get sts n8n -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
+  READY=${READY:-0}
   DESIRED=$(kubectl -n $NAMESPACE get sts n8n -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "2")
+
   echo "   状态: $READY / $DESIRED"
+
   if [ "$READY" == "$DESIRED" ]; then
-    echo "✅ 部署成功"
-    break
+    echo "🎉 n8n HA 部署成功"
+    exit 0
   fi
+
   sleep 5
 done
 
-# ===================================================
-# 生成 HTML 交付页面
-# ===================================================
-
-SERVICE_IP=$(kubectl -n $NAMESPACE get svc n8n -o jsonpath='{.spec.clusterIP}')
-REPLICA_COUNT=$(kubectl -n $NAMESPACE get sts n8n -o jsonpath='{.spec.replicas}')
-
-cat > "$HTML_FILE" <<EOF
-<html>
-<head><title>n8n HA 部署报告</title></head>
-<body>
-<h2>🎉 n8n HA 部署成功</h2>
-<p><b>Namespace:</b> $NAMESPACE</p>
-<p><b>ClusterIP:</b> $SERVICE_IP</p>
-<p><b>Replicas:</b> $REPLICA_COUNT</p>
-<pre>kubectl -n $NAMESPACE port-forward svc/n8n 5678:5678</pre>
-</body>
-</html>
-EOF
-
-echo ""
-echo "========================================="
-echo "🎉 n8n HA 企业部署完成 (v$SCRIPT_VERSION)"
-echo "HTML 页面: $HTML_FILE"
-echo "========================================="
+echo "❌ 部署失败，打印诊断信息"
+kubectl -n $NAMESPACE get pods -o wide
+kubectl -n $NAMESPACE describe pod n8n-0 || true
+exit 1
