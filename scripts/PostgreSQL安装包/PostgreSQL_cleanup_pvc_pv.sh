@@ -1,196 +1,160 @@
 #!/bin/bash
 # ===================================================
-# 脚本名称: generate_postgresql_report_dir.sh
-# 功能: 生成 PostgreSQL HA 企业交付报告（命名规范检测）
-#       - 输出到 /mnt/truenas/PostgreSQL安装报告书/
-#       - 文件名: PostgreSQL安装报告书-命名规约检测报告书.html
-#       - 支持自动创建 Namespace、Secret、ConfigMap、StatefulSet、Service
+# 脚本名称: generate_postgresql_naming_report.sh
+# 功能: 检测 PostgreSQL HA 命名规范，生成 HTML 报告
+#       - 不执行创建，只汇报
 # ===================================================
 
 set -e
 
 # ------------------------------
-# 配置（企业级标准化命名）
+# 标准化命名规范
 # ------------------------------
-NAMESPACE=${NAMESPACE:-ns-postgres-ha}
-APP_LABEL=${APP_LABEL:-postgres-ha}
+NAMESPACE_STANDARD="ns-postgres-ha"
+STATEFULSET_STANDARD="sts-postgres-ha"
+SERVICE_PRIMARY_STANDARD="svc-postgres-primary"
+SERVICE_REPLICA_STANDARD="svc-postgres-replica"
+PVC_PATTERN="pvc-postgres-ha-"
+APP_LABEL="postgres-ha"
+
+# 报告目录
 BASE_DIR="/mnt/truenas"
 REPORT_DIR="$BASE_DIR/PostgreSQL安装报告书"
 HTML_FILE="$REPORT_DIR/PostgreSQL安装报告书-命名规约检测报告书.html"
-
-STATEFULSET_NAME="sts-postgres-ha"
-SERVICE_PRIMARY="svc-postgres-primary"
-SERVICE_REPLICA="svc-postgres-replica"
-SECRET_NAME="secret-postgres-password"
-CONFIGMAP_NAME="cm-postgres-config"
-
-# ------------------------------
-# 创建报告目录
-# ------------------------------
 mkdir -p "$REPORT_DIR"
 
 # ------------------------------
-# 检查并创建 Namespace
+# 获取资源信息
 # ------------------------------
-if ! kubectl get ns "$NAMESPACE" &>/dev/null; then
-    echo "📦 Namespace $NAMESPACE 不存在，正在创建..."
-    kubectl create ns "$NAMESPACE"
-else
-    echo "📌 Namespace $NAMESPACE 已存在"
-fi
+EXIST_NAMESPACE=$(kubectl get ns | awk '{print $1}' | grep "^$NAMESPACE_STANDARD$" || echo "")
+STS_LIST=$(kubectl -n $NAMESPACE_STANDARD get sts -l app=$APP_LABEL -o name 2>/dev/null || echo "")
+SERVICE_LIST=$(kubectl -n $NAMESPACE_STANDARD get svc -l app=$APP_LABEL -o name 2>/dev/null || echo "")
+PVC_LIST=$(kubectl -n $NAMESPACE_STANDARD get pvc -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || echo "")
+POD_STATUS=$(kubectl -n $NAMESPACE_STANDARD get pods -l app=$APP_LABEL -o custom-columns=NAME:.metadata.name,STATUS:.status.phase --no-headers 2>/dev/null || echo "")
 
 # ------------------------------
-# 检查并创建 Secret
-# ------------------------------
-if ! kubectl -n "$NAMESPACE" get secret "$SECRET_NAME" &>/dev/null; then
-    echo "🔑 Secret $SECRET_NAME 不存在，正在创建..."
-    kubectl -n "$NAMESPACE" create secret generic "$SECRET_NAME" \
-        --from-literal=postgres-password="ChangeMe123"
-else
-    echo "📌 Secret $SECRET_NAME 已存在"
-fi
-
-# ------------------------------
-# 检查并创建 ConfigMap（可选）
-# ------------------------------
-if ! kubectl -n "$NAMESPACE" get configmap "$CONFIGMAP_NAME" &>/dev/null; then
-    echo "🗂️ ConfigMap $CONFIGMAP_NAME 不存在，正在创建..."
-    kubectl -n "$NAMESPACE" create configmap "$CONFIGMAP_NAME" \
-        --from-literal=postgresql.conf="shared_buffers = 128MB"
-else
-    echo "📌 ConfigMap $CONFIGMAP_NAME 已存在"
-fi
-
-# ------------------------------
-# 检查并创建 StatefulSet
-# ------------------------------
-if ! kubectl -n "$NAMESPACE" get sts "$STATEFULSET_NAME" &>/dev/null; then
-    echo "⚡ StatefulSet $STATEFULSET_NAME 不存在，建议使用 Helm 或 YAML 部署"
-else
-    echo "📌 StatefulSet $STATEFULSET_NAME 已存在"
-fi
-
-# ------------------------------
-# 检查并创建 Service（主/从）
-# ------------------------------
-for svc in "$SERVICE_PRIMARY" "$SERVICE_REPLICA"; do
-    if ! kubectl -n "$NAMESPACE" get svc "$svc" &>/dev/null; then
-        echo "🌐 Service $svc 不存在，请手动创建或通过 YAML 部署"
-    else
-        echo "📌 Service $svc 已存在"
-    fi
-done
-
-# ------------------------------
-# 获取 PostgreSQL 资源信息
-# ------------------------------
-STS_LIST=$(kubectl -n $NAMESPACE get sts -l app=$APP_LABEL -o name || echo "未发现 StatefulSet")
-SERVICE_LIST=$(kubectl -n $NAMESPACE get svc -l app=$APP_LABEL -o name || echo "未发现 Service")
-PVC_LIST=$(kubectl -n $NAMESPACE get pvc -l app=$APP_LABEL -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
-POD_STATUS=$(kubectl -n $NAMESPACE get pods -l app=$APP_LABEL -o custom-columns=NAME:.metadata.name,STATUS:.status.phase --no-headers || true)
-
-PRIMARY_SVC=$(echo "$SERVICE_LIST" | grep "$SERVICE_PRIMARY" | head -n1 | awk -F'/' '{print $2}' || echo "$SERVICE_PRIMARY")
-SERVICE_IP=$(kubectl -n $NAMESPACE get svc $PRIMARY_SVC -o jsonpath='{.spec.clusterIP}' || echo "127.0.0.1")
-REPLICA_COUNT=$(kubectl -n $NAMESPACE get sts -l app=$APP_LABEL -o jsonpath='{.items[0].spec.replicas}' || echo "2")
-
-# ------------------------------
-# 生成 HTML 报告
+# HTML 报告头
 # ------------------------------
 cat > "$HTML_FILE" <<EOF
 <!DOCTYPE html>
 <html lang="zh">
 <head>
 <meta charset="UTF-8">
-<title>PostgreSQL 安装报告书 - 命名规约检测报告书</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PostgreSQL 命名规约检测报告</title>
 <style>
 body {margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f5f7fa}
 .container {display:flex;justify-content:center;align-items:flex-start;padding:30px}
-.card {background:#fff;padding:30px 40px;border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.08);width:750px}
+.card {background:#fff;padding:30px 40px;border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.08);width:800px}
 h2 {color:#1677ff;margin-bottom:20px;text-align:center}
 h3 {color:#444;margin-top:25px;margin-bottom:10px;border-bottom:1px solid #eee;padding-bottom:5px}
 pre {background:#f0f2f5;padding:12px;border-radius:6px;overflow-x:auto;font-family:monospace}
-.info {margin-bottom:10px}
-.label {font-weight:600;color:#333}
-.value {color:#555;margin-left:5px}
-.status-running {color:green;font-weight:600}
-.status-pending {color:orange;font-weight:600}
-.status-failed {color:red;font-weight:600}
-.footer {margin-top:20px;font-size:12px;color:#888;text-align:center}
+.status-ok {color:green;font-weight:600}
+.status-warning {color:orange;font-weight:600}
+.status-missing {color:red;font-weight:600}
 </style>
 </head>
 <body>
 <div class="container">
 <div class="card">
-<h2>🎉 PostgreSQL HA 安装报告书 - 命名规约检测</h2>
+<h2>🎯 PostgreSQL HA 命名规约检测报告</h2>
 
-<h3>基本信息</h3>
-<div class="info"><span class="label">Namespace:</span><span class="value">$NAMESPACE</span></div>
-<div class="info"><span class="label">主服务:</span><span class="value">$PRIMARY_SVC</span></div>
-<div class="info"><span class="label">ClusterIP:</span><span class="value">$SERVICE_IP</span></div>
-<div class="info"><span class="label">端口:</span><span class="value">5432</span></div>
-<div class="info"><span class="label">副本数:</span><span class="value">$REPLICA_COUNT</span></div>
-
-<h3>StatefulSet 列表</h3>
-<pre>$STS_LIST</pre>
-
-<h3>Service 列表</h3>
-<pre>$SERVICE_LIST</pre>
-
-<h3>PVC 列表</h3>
-<pre>$PVC_LIST</pre>
-
-<h3>Pod 状态</h3>
-<pre>
+<h3>Namespace</h3>
 EOF
 
-# Pod 状态逐行输出
-while read -r line; do
-  POD_NAME=$(echo $line | awk '{print $1}')
-  STATUS=$(echo $line | awk '{print $2}')
-  CASE_CLASS="status-failed"
-  [[ "$STATUS" == "Running" ]] && CASE_CLASS="status-running"
-  [[ "$STATUS" == "Pending" ]] && CASE_CLASS="status-pending"
-  echo "<div class=\"$CASE_CLASS\">$POD_NAME : $STATUS</div>" >> "$HTML_FILE"
-done <<< "$POD_STATUS"
+# ------------------------------
+# Namespace 检测
+# ------------------------------
+if [[ -z "$EXIST_NAMESPACE" ]]; then
+    echo "<div class='status-missing'>❌ Namespace $NAMESPACE_STANDARD 不存在，需要创建</div>" >> "$HTML_FILE"
+else
+    echo "<div class='status-ok'>✅ Namespace $NAMESPACE_STANDARD 已存在</div>" >> "$HTML_FILE"
+fi
 
+# ------------------------------
+# StatefulSet 检测
+# ------------------------------
 cat >> "$HTML_FILE" <<EOF
-</pre>
+<h3>StatefulSet</h3>
+EOF
+if [[ -z "$STS_LIST" ]]; then
+    echo "<div class='status-missing'>❌ StatefulSet $STATEFULSET_STANDARD 不存在，需要创建</div>" >> "$HTML_FILE"
+else
+    for sts in $STS_LIST; do
+        NAME=$(echo $sts | awk -F'/' '{print $2}')
+        if [[ "$NAME" == "$STATEFULSET_STANDARD" ]]; then
+            echo "<div class='status-ok'>✅ StatefulSet $NAME 命名规范正确</div>" >> "$HTML_FILE"
+        else
+            echo "<div class='status-warning'>⚠️ StatefulSet $NAME 命名不规范，建议删除重建</div>" >> "$HTML_FILE"
+        fi
+    done
+fi
 
-<h3>访问方式</h3>
-<pre>
-kubectl -n $NAMESPACE port-forward svc/$PRIMARY_SVC 5432:5432
-psql -h localhost -U postgres -d postgres
-</pre>
+# ------------------------------
+# Service 检测
+# ------------------------------
+cat >> "$HTML_FILE" <<EOF
+<h3>Service</h3>
+EOF
+SERVICES_TO_CHECK=("$SERVICE_PRIMARY_STANDARD" "$SERVICE_REPLICA_STANDARD")
+for svc in "${SERVICES_TO_CHECK[@]}"; do
+    if echo "$SERVICE_LIST" | grep -q "/$svc"; then
+        echo "<div class='status-ok'>✅ Service $svc 已存在且命名规范正确</div>" >> "$HTML_FILE"
+    else
+        if echo "$SERVICE_LIST" | grep -q "postgres"; then
+            echo "<div class='status-warning'>⚠️ Service 名称与 $svc 不匹配，建议删除重建</div>" >> "$HTML_FILE"
+        else
+            echo "<div class='status-missing'>❌ Service $svc 不存在，需要创建</div>" >> "$HTML_FILE"
+        fi
+    fi
+done
 
-<h3>Python 示例</h3>
-<pre>
-import psycopg2
-conn = psycopg2.connect(host="$SERVICE_IP", port=5432, user="postgres", password="yourpassword", dbname="postgres")
-cur = conn.cursor()
-cur.execute("SELECT version();")
-print(cur.fetchone())
-conn.close()
-</pre>
+# ------------------------------
+# PVC 检测
+# ------------------------------
+cat >> "$HTML_FILE" <<EOF
+<h3>PVC</h3>
+EOF
+if [[ -z "$PVC_LIST" ]]; then
+    echo "<div class='status-missing'>❌ PVC 未发现，需要创建</div>" >> "$HTML_FILE"
+else
+    for pvc in $PVC_LIST; do
+        if [[ "$pvc" == ${PVC_PATTERN}* ]]; then
+            echo "<div class='status-ok'>✅ PVC $pvc 命名规范正确</div>" >> "$HTML_FILE"
+        else
+            echo "<div class='status-warning'>⚠️ PVC $pvc 命名不规范，建议删除重建</div>" >> "$HTML_FILE"
+        fi
+    done
+fi
 
-<h3>Java 示例</h3>
-<pre>
-String url = "jdbc:postgresql://$SERVICE_IP:5432/postgres";
-Connection conn = DriverManager.getConnection(url, "postgres", "yourpassword");
-Statement stmt = conn.createStatement();
-ResultSet rs = stmt.executeQuery("SELECT version();");
-while(rs.next()) System.out.println(rs.getString(1));
-conn.close();
-</pre>
+# ------------------------------
+# Pod 状态检测
+# ------------------------------
+cat >> "$HTML_FILE" <<EOF
+<h3>Pod 状态</h3>
+EOF
+if [[ -z "$POD_STATUS" ]]; then
+    echo "<div class='status-missing'>❌ Pod 未发现</div>" >> "$HTML_FILE"
+else
+    while read -r line; do
+        POD_NAME=$(echo $line | awk '{print $1}')
+        STATUS=$(echo $line | awk '{print $2}')
+        CASE_CLASS="status-missing"
+        [[ "$STATUS" == "Running" ]] && CASE_CLASS="status-ok"
+        [[ "$STATUS" == "Pending" ]] && CASE_CLASS="status-warning"
+        echo "<div class='$CASE_CLASS'>$POD_NAME : $STATUS</div>" >> "$HTML_FILE"
+    done <<< "$POD_STATUS"
+fi
 
-<div class="footer">
+# ------------------------------
+# HTML Footer
+# ------------------------------
+cat >> "$HTML_FILE" <<EOF
+<div style="margin-top:20px;font-size:12px;color:#888;text-align:center">
 生成时间: $(date '+%Y-%m-%d %H:%M:%S')
 </div>
-
-</div>
-</div>
+</div></div>
 </body>
 </html>
 EOF
 
-echo "✅ PostgreSQL 安装报告书生成完成: $HTML_FILE"
+echo "✅ PostgreSQL 命名规约检测报告生成完成: $HTML_FILE"
