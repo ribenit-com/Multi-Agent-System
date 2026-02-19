@@ -1,5 +1,8 @@
 # PostgreSQL HA 企业级清理与规范化 PVC 初始化脚本说明
 
+##　使用方法：　./enterprise_master.sh PostgreSQL_HA ./check_postgres_names_json.sh
+
+
 ## 脚本概述
 
 **脚本名称**: `cleanup_init_postgresql_enterprise.sh`  
