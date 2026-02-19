@@ -4,11 +4,12 @@ set -Eeuo pipefail
 ############################################
 # 基础变量
 ############################################
-NAMESPACE="n8n"
+NAMESPACE="automation"
 RELEASE="n8n-ha"
 IMAGE="n8nio/n8n:2.8.2"
 TAR_FILE="n8n_2.8.2.tar"
 APP_NAME="n8n-ha"
+GITOPS_DIR="./n8n-gitops"
 
 # 数据库信息
 DB_NAMESPACE="database"
@@ -39,11 +40,8 @@ kubectl version --client >/dev/null 2>&1 || kubectl version >/dev/null 2>&1 || t
 # 1️⃣ containerd 镜像检查（本地存在优先，不 pull）
 ############################################
 echo "[CHECK] containerd 镜像"
-
-# 只保留镜像名和 tag，忽略 registry 前缀
 IMAGE_NAME_ONLY="${IMAGE##*/}"   # n8n:2.8.2
 
-# 检查镜像是否已经存在
 if sudo ctr -n k8s.io images list 2>/dev/null | grep -q "$IMAGE_NAME_ONLY"; then
     echo "[OK] 镜像已存在: $IMAGE_NAME_ONLY"
 else
@@ -61,41 +59,205 @@ else
 fi
 
 ############################################
-# 2️⃣ Namespace
+# 2️⃣ 生成 GitOps YAML 文件
 ############################################
-kubectl get ns "$NAMESPACE" >/dev/null 2>&1 || kubectl create ns "$NAMESPACE" >/dev/null 2>&1 || true
+mkdir -p "$GITOPS_DIR"
+
+# namespace.yaml
+cat > "$GITOPS_DIR/namespace.yaml" <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: $NAMESPACE
+EOF
+
+# secret.yaml
+cat > "$GITOPS_DIR/secret.yaml" <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-secret
+  namespace: $NAMESPACE
+type: Opaque
+stringData:
+  password: $DB_PASS
+EOF
+
+# statefulset.yaml
+cat > "$GITOPS_DIR/statefulset.yaml" <<EOF
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: n8n
+  namespace: $NAMESPACE
+spec:
+  serviceName: n8n
+  replicas: 2
+  selector:
+    matchLabels:
+      app: n8n
+  template:
+    metadata:
+      labels:
+        app: n8n
+    spec:
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:15
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h $DB_SERVICE.$DB_NAMESPACE.svc.cluster.local -p 5432; do
+                echo "Waiting for Postgres..."
+                sleep 3
+              done
+      containers:
+        - name: n8n
+          image: $IMAGE
+          ports:
+            - containerPort: 5678
+          env:
+            - name: DB_TYPE
+              value: postgresdb
+            - name: DB_POSTGRESDB_HOST
+              value: $DB_SERVICE.$DB_NAMESPACE.svc.cluster.local
+            - name: DB_POSTGRESDB_PORT
+              value: "5432"
+            - name: DB_POSTGRESDB_DATABASE
+              value: $DB_NAME
+            - name: DB_POSTGRESDB_USER
+              value: $DB_USER
+            - name: DB_POSTGRESDB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: password
+            - name: EXECUTIONS_MODE
+              value: regular
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 5678
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 5678
+            initialDelaySeconds: 60
+            periodSeconds: 20
+          volumeMounts:
+            - name: data
+              mountPath: /home/node/.n8n
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - n8n
+              topologyKey: kubernetes.io/hostname
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
+EOF
+
+# service.yaml
+cat > "$GITOPS_DIR/service.yaml" <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: n8n
+  namespace: $NAMESPACE
+spec:
+  selector:
+    app: n8n
+  ports:
+    - port: 5678
+      targetPort: 5678
+  type: ClusterIP
+EOF
+
+# ingress.yaml
+cat > "$GITOPS_DIR/ingress.yaml" <<EOF
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: n8n
+  namespace: $NAMESPACE
+spec:
+  rules:
+    - host: n8n.example.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: n8n
+                port:
+                  number: 5678
+EOF
+
+# argocd-application.yaml
+cat > "$GITOPS_DIR/argocd-application.yaml" <<EOF
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: $APP_NAME
+  namespace: argocd
+spec:
+  destination:
+    namespace: $NAMESPACE
+    server: https://kubernetes.default.svc
+  source:
+    repoURL: $(git config --get remote.origin.url 2>/dev/null || echo "")
+    targetRevision: main
+    path: $GITOPS_DIR
+  project: default
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+EOF
+
+echo "[OK] GitOps YAML 文件生成完成: $GITOPS_DIR"
 
 ############################################
 # 3️⃣ Helm 部署
 ############################################
-echo "[HELM] 安装/升级 Release"
+kubectl get ns "$NAMESPACE" >/dev/null 2>&1 || kubectl create ns "$NAMESPACE" >/dev/null 2>&1 || true
 
+echo "[HELM] 安装/升级 Release"
 if helm status "$RELEASE" -n "$NAMESPACE" >/dev/null 2>&1; then
-    if ! helm upgrade "$RELEASE" . -n "$NAMESPACE"; then
-        echo "[WARN] Helm 升级失败，尝试回滚"
-        helm rollback "$RELEASE" 1 -n "$NAMESPACE" >/dev/null 2>&1 || true
-    fi
+    helm upgrade "$RELEASE" . -n "$NAMESPACE" || true
 else
-    helm install "$RELEASE" . -n "$NAMESPACE" >/dev/null 2>&1 || true
+    helm install "$RELEASE" . -n "$NAMESPACE" || true
 fi
 
 ############################################
 # 4️⃣ GitOps 同步
 ############################################
-echo "[GITOPS] 同步 Git"
-
 if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-    REPO_ROOT=$(git rev-parse --show-toplevel)
-    cd "$REPO_ROOT"
-
-    git add n8n-ha-chart >/dev/null 2>&1 || true
-
+    cd "$(git rev-parse --show-toplevel)"
+    git add "$GITOPS_DIR" >/dev/null 2>&1 || true
     if ! git diff --cached --quiet; then
-        git commit -m "feat: auto update n8n-ha-chart $(date +%F-%T)" >/dev/null 2>&1 || true
+        git commit -m "feat: auto update n8n-gitops $(date +%F-%T)" >/dev/null 2>&1 || true
     fi
-
-    git fetch origin main >/dev/null 2>&1 || true
-    git rebase origin/main >/dev/null 2>&1 || true
     git push origin main >/dev/null 2>&1 || true
 else
     echo "[WARN] 当前目录非 Git 仓库，跳过 GitOps"
@@ -105,30 +267,7 @@ fi
 # 5️⃣ ArgoCD 同步
 ############################################
 if kubectl get ns argocd >/dev/null 2>&1; then
-    echo "[ARGOCD] 同步 Application"
-
-    cat <<EOF | kubectl apply -f - >/dev/null 2>&1 || true
-apiVersion: argoproj.io/v1alpha1
-kind: Application
-metadata:
-  name: $APP_NAME
-  namespace: argocd
-spec:
-  project: default
-  source:
-    repoURL: $(git config --get remote.origin.url 2>/dev/null || echo "")
-    targetRevision: main
-    path: n8n-ha-chart
-  destination:
-    server: https://kubernetes.default.svc
-    namespace: $NAMESPACE
-  syncPolicy:
-    automated:
-      prune: true
-      selfHeal: true
-EOF
-
-    sleep 3
+    kubectl apply -f "$GITOPS_DIR/argocd-application.yaml" >/dev/null 2>&1 || true
 fi
 
 ############################################
@@ -155,8 +294,6 @@ DNS_STATUS="FAILED"
 TCP_STATUS="FAILED"
 AUTH_STATUS="FAILED"
 
-echo "[CHECK] 数据库连通性"
-
 kubectl run dns-test --rm -i --restart=Never \
     --image=busybox -n "$NAMESPACE" \
     -- nslookup "$DB_HOST" >/dev/null 2>&1 && DNS_STATUS="OK" || true
@@ -168,8 +305,7 @@ kubectl run tcp-test --rm -i --restart=Never \
 kubectl run auth-test --rm -i --restart=Never \
     --image=postgres:15 -n "$NAMESPACE" \
     -- env PGPASSWORD="$DB_PASS" \
-       psql -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME" -c '\q' \
-       >/dev/null 2>&1 && AUTH_STATUS="OK" || true
+       psql -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME" -c '\q' >/dev/null 2>&1 && AUTH_STATUS="OK" || true
 
 ############################################
 # 7️⃣ 生成 HTML 报告
