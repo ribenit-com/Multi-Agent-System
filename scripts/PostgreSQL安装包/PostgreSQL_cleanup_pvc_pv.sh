@@ -1,162 +1,133 @@
 #!/bin/bash
 # ===================================================
-# 脚本名称: cleanup_init_postgresql_auto.sh
-# 功能: PostgreSQL HA 全自动清理与标准化 PVC 初始化
-#      - Namespace 不存在自动创建
-#      - 强制标准化命名 pvc-pg-data-n
-#      - 支持 Dry-Run 模式
-#      - 自动关联 StorageClass
-#      - 安全删除 StatefulSet 与孤儿 PV
+# 脚本名称: generate_postgresql_report_dir.sh
+# 功能: 生成 PostgreSQL HA 企业交付报告
+#       - 输出到 /mnt/truenas/PostgreSQL安装报告书/
+#       - 文件名: PostgreSQL安装报告书-命名规约检测报告书.html
 # ===================================================
 
-set -Eeuo pipefail
-
 # ------------------------------
-# 默认配置（可通过环境变量覆盖）
+# 配置
 # ------------------------------
 NAMESPACE=${NAMESPACE:-ns-mid-storage}
 APP_LABEL=${APP_LABEL:-postgres}
-PVC_SIZE=${PVC_SIZE:-20Gi}
-STORAGE_CLASS=${STORAGE_CLASS:-sc-ssd-high}
-DRY_RUN=${DRY_RUN:-true}
+BASE_DIR="/mnt/truenas"
+REPORT_DIR="$BASE_DIR/PostgreSQL安装报告书"
+HTML_FILE="$REPORT_DIR/PostgreSQL安装报告书-命名规约检测报告书.html"
 
-PVC_PREFIX="pvc-pg-data-"
-
-LOG_FILE="postgres_cleanup_$(date +%Y%m%d_%H%M%S).log"
-
-# ------------------------------
-# 日志函数
-# ------------------------------
-log() {
-    echo "$(date +%F\ %T) $1" | tee -a "$LOG_FILE"
-}
-
-exec_cmd() {
-    if [[ "$DRY_RUN" == "true" ]]; then
-        log "🔍 [DRY-RUN] 将执行: $*"
-    else
-        log "⚡ 执行: $*"
-        eval "$*"
-    fi
-}
-
-log "---------------------------------------------------"
-log "🚀 PostgreSQL 企业级全自动资源清理初始化"
-log "📍 Namespace: $NAMESPACE"
-log "🛡 Dry Run: $DRY_RUN"
-log "🛠 StorageClass: $STORAGE_CLASS"
-log "---------------------------------------------------"
+# 创建报告目录
+mkdir -p "$REPORT_DIR"
 
 # ------------------------------
-# 1. 自动创建 Namespace
+# 获取 PostgreSQL 资源信息
 # ------------------------------
-if ! kubectl get ns "$NAMESPACE" &>/dev/null; then
-    log "⚠️ Namespace $NAMESPACE 不存在，正在创建"
-    exec_cmd "kubectl create namespace $NAMESPACE"
-else
-    log "✅ Namespace $NAMESPACE 已存在"
-fi
+STS_LIST=$(kubectl -n $NAMESPACE get sts -l app=$APP_LABEL -o name || echo "未发现 StatefulSet")
+SERVICE_LIST=$(kubectl -n $NAMESPACE get svc -l app=$APP_LABEL -o name || echo "未发现 Service")
+PVC_LIST=$(kubectl -n $NAMESPACE get pvc -l app=$APP_LABEL -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
+POD_STATUS=$(kubectl -n $NAMESPACE get pods -l app=$APP_LABEL -o custom-columns=NAME:.metadata.name,STATUS:.status.phase --no-headers || true)
+
+PRIMARY_SVC=$(echo "$SERVICE_LIST" | head -n1 | awk -F'/' '{print $2}')
+SERVICE_IP=$(kubectl -n $NAMESPACE get svc $PRIMARY_SVC -o jsonpath='{.spec.clusterIP}' || echo "127.0.0.1")
+REPLICA_COUNT=$(kubectl -n $NAMESPACE get sts -l app=$APP_LABEL -o jsonpath='{.items[0].spec.replicas}' || echo "2")
 
 # ------------------------------
-# 2. HA 副本检测
+# 生成 HTML
 # ------------------------------
-STS_NAME=$(kubectl get sts -n "$NAMESPACE" -l app="$APP_LABEL" -o name || true)
-if [[ -n "$STS_NAME" ]]; then
-    HA_REPLICAS=$(kubectl get sts "$STS_NAME" -n "$NAMESPACE" -o jsonpath='{.spec.replicas}')
-    log "ℹ️ 检测到 StatefulSet $STS_NAME，HA 副本数自动同步: $HA_REPLICAS"
-else
-    HA_REPLICAS=${HA_REPLICAS:-3}
-    log "ℹ️ 未检测到 StatefulSet，使用默认 HA 副本: $HA_REPLICAS"
-fi
+cat > "$HTML_FILE" <<EOF
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<title>PostgreSQL 安装报告书 - 命名规约检测报告书</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body {margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f5f7fa}
+.container {display:flex;justify-content:center;align-items:flex-start;padding:30px}
+.card {background:#fff;padding:30px 40px;border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.08);width:750px}
+h2 {color:#1677ff;margin-bottom:20px;text-align:center}
+h3 {color:#444;margin-top:25px;margin-bottom:10px;border-bottom:1px solid #eee;padding-bottom:5px}
+pre {background:#f0f2f5;padding:12px;border-radius:6px;overflow-x:auto;font-family:monospace}
+.info {margin-bottom:10px}
+.label {font-weight:600;color:#333}
+.value {color:#555;margin-left:5px}
+.status-running {color:green;font-weight:600}
+.status-pending {color:orange;font-weight:600}
+.status-failed {color:red;font-weight:600}
+.footer {margin-top:20px;font-size:12px;color:#888;text-align:center}
+</style>
+</head>
+<body>
+<div class="container">
+<div class="card">
+<h2>🎉 PostgreSQL HA 安装报告书 - 命名规约检测</h2>
 
-# ------------------------------
-# 3. StatefulSet 删除
-# ------------------------------
-if [[ -n "$STS_NAME" ]]; then
-    ACTIVE_PODS=$(kubectl get pods -n "$NAMESPACE" -l app="$APP_LABEL" -o name)
-    if [[ -n "$ACTIVE_PODS" ]]; then
-        log "⚠️ 检测到正在运行的 Pod:"
-        echo "$ACTIVE_PODS" | tee -a "$LOG_FILE"
-        log "💡 建议先备份数据或快照"
-    fi
-    log "=== 删除 StatefulSet ==="
-    exec_cmd "kubectl delete $STS_NAME -n $NAMESPACE --cascade=foreground"
-else
-    log "✅ 未发现 StatefulSet"
-fi
+<h3>基本信息</h3>
+<div class="info"><span class="label">Namespace:</span><span class="value">$NAMESPACE</span></div>
+<div class="info"><span class="label">主服务:</span><span class="value">$PRIMARY_SVC</span></div>
+<div class="info"><span class="label">ClusterIP:</span><span class="value">$SERVICE_IP</span></div>
+<div class="info"><span class="label">端口:</span><span class="value">5432</span></div>
+<div class="info"><span class="label">副本数:</span><span class="value">$REPLICA_COUNT</span></div>
 
-# ------------------------------
-# 4. PVC 清理
-# ------------------------------
-log "=== Step 1: 清理不规范 PVC ==="
-CURRENT_PVCS=$(kubectl get pvc -n "$NAMESPACE" -l app="$APP_LABEL" -o jsonpath='{.items[*].metadata.name}')
-for pvc in $CURRENT_PVCS; do
-    if [[ "$pvc" =~ ^$PVC_PREFIX[0-9]+$ ]]; then
-        idx=${pvc#$PVC_PREFIX}
-        if [ "$idx" -lt "$HA_REPLICAS" ]; then
-            log "✅ PVC $pvc 符合规范且在副本范围内，保留"
-            continue
-        else
-            log "🗑 PVC $pvc 超出副本范围，准备删除"
-        fi
-    else
-        log "🗑 PVC $pvc 命名不合规，准备删除"
-    fi
-    log "💾 请确保已备份 PVC $pvc 数据"
-    exec_cmd "kubectl delete pvc $pvc -n $NAMESPACE"
-done
+<h3>StatefulSet 列表</h3>
+<pre>$STS_LIST</pre>
 
-# ------------------------------
-# 5. PVC 初始化
-# ------------------------------
-log "=== Step 2: 初始化标准 HA PVC ==="
-for i in $(seq 0 $((HA_REPLICAS-1))); do
-    PVC_NAME="${PVC_PREFIX}${i}"
-    if kubectl get pvc "$PVC_NAME" -n "$NAMESPACE" &>/dev/null; then
-        log "🆗 PVC $PVC_NAME 已存在"
-    else
-        log "➕ 创建 PVC $PVC_NAME"
-        if [[ "$DRY_RUN" == "false" ]]; then
-            cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: $PVC_NAME
-  namespace: $NAMESPACE
-  labels:
-    app: $APP_LABEL
-    infra/project: enterprise-ai
-    infra/node-type: data
-spec:
-  storageClassName: $STORAGE_CLASS
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: $PVC_SIZE
+<h3>Service 列表</h3>
+<pre>$SERVICE_LIST</pre>
+
+<h3>PVC 列表</h3>
+<pre>$PVC_LIST</pre>
+
+<h3>Pod 状态</h3>
+<pre>
 EOF
-        else
-            log "🔍 [DRY-RUN] 将创建 PVC $PVC_NAME (Size: $PVC_SIZE, SC: $STORAGE_CLASS)"
-        fi
-    fi
-done
 
-# ------------------------------
-# 6. 孤儿 PV 清理
-# ------------------------------
-log "=== Step 3: 清理孤儿 PV (Released) ==="
-ORPHAN_PVS=$(kubectl get pv -o json | jq -r ".items[] | select(.status.phase==\"Released\" and .spec.claimRef.namespace==\"$NAMESPACE\") | .metadata.name")
-for pv in $ORPHAN_PVS; do
-    log "🧹 孤儿 PV $pv 将被删除"
-    exec_cmd "kubectl delete pv $pv"
-done
+# Pod 状态逐行输出
+while read -r line; do
+  POD_NAME=$(echo $line | awk '{print $1}')
+  STATUS=$(echo $line | awk '{print $2}')
+  CASE_CLASS="status-failed"
+  [[ "$STATUS" == "Running" ]] && CASE_CLASS="status-running"
+  [[ "$STATUS" == "Pending" ]] && CASE_CLASS="status-pending"
+  echo "<div class=\"$CASE_CLASS\">$POD_NAME : $STATUS</div>" >> "$HTML_FILE"
+done <<< "$POD_STATUS"
 
-# ------------------------------
-# 7. 完成提示
-# ------------------------------
-log "---------------------------------------------------"
-log "✅ PostgreSQL HA 全自动标准化完成"
-if [[ "$DRY_RUN" == "true" ]]; then
-    log "💡 提示: 当前为 Dry-Run 模式，如需执行，请运行: DRY_RUN=false bash $0"
-fi
-log "📄 日志文件: $LOG_FILE"
+cat >> "$HTML_FILE" <<EOF
+</pre>
+
+<h3>访问方式</h3>
+<pre>
+kubectl -n $NAMESPACE port-forward svc/$PRIMARY_SVC 5432:5432
+psql -h localhost -U postgres -d postgres
+</pre>
+
+<h3>Python 示例</h3>
+<pre>
+import psycopg2
+conn = psycopg2.connect(host="$SERVICE_IP", port=5432, user="postgres", password="yourpassword", dbname="postgres")
+cur = conn.cursor()
+cur.execute("SELECT version();")
+print(cur.fetchone())
+conn.close()
+</pre>
+
+<h3>Java 示例</h3>
+<pre>
+String url = "jdbc:postgresql://$SERVICE_IP:5432/postgres";
+Connection conn = DriverManager.getConnection(url, "postgres", "yourpassword");
+Statement stmt = conn.createStatement();
+ResultSet rs = stmt.executeQuery("SELECT version();");
+while(rs.next()) System.out.println(rs.getString(1));
+conn.close();
+</pre>
+
+<div class="footer">
+生成时间: $(date '+%Y-%m-%d %H:%M:%S')
+</div>
+
+</div>
+</div>
+</body>
+</html>
+EOF
+
+echo "✅ PostgreSQL 安装报告书生成完成: $HTML_FILE"
