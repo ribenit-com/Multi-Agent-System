@@ -1,23 +1,23 @@
 #!/bin/bash
 # ===================================================
-# 脚本名称: generate_postgres_html_report.sh
-# 功能: 生成 PostgreSQL HA 命名规约 HTML 报告
-#       - 不返回 JSON
-#       - 仅生成 HTML 文件
+# 脚本名称: check_postgres_names_html.sh
+# 功能: 根据 JSON 数据生成 PostgreSQL HA 命名规约 HTML 报告
+#       - 接收 JSON 文件路径作为参数
 # ===================================================
 
 set -e
 
+JSON_FILE="$1"
+
+if [ -z "$JSON_FILE" ] || [ ! -f "$JSON_FILE" ]; then
+    echo "❌ 请提供有效的 JSON 文件路径"
+    exit 1
+fi
+
 # ------------------------------
-# 标准化命名规范
+# 读取 JSON 数据
 # ------------------------------
-NAMESPACE_STANDARD="ns-postgres-ha"
-STATEFULSET_STANDARD="sts-postgres-ha"
-SERVICE_PRIMARY_STANDARD="svc-postgres-primary"
-SERVICE_REPLICA_STANDARD="svc-postgres-replica"
-PVC_PATTERN="pvc-postgres-ha-"
-APP_LABEL="postgres-ha"
-APP_NAME="PostgreSQL"
+JSON_DATA=$(cat "$JSON_FILE")
 
 # ------------------------------
 # 报告目录
@@ -26,15 +26,6 @@ BASE_DIR="/mnt/truenas"
 REPORT_DIR="$BASE_DIR/PostgreSQL安装报告书"
 mkdir -p "$REPORT_DIR"
 HTML_FILE="$REPORT_DIR/PostgreSQL安装报告书-命名规约检测报告书.html"
-
-# ------------------------------
-# 获取资源信息
-# ------------------------------
-EXIST_NAMESPACE=$(kubectl get ns | awk '{print $1}' | grep "^$NAMESPACE_STANDARD$" || echo "")
-STS_LIST=$(kubectl -n $NAMESPACE_STANDARD get sts -l app=$APP_LABEL -o name 2>/dev/null || echo "")
-SERVICE_LIST=$(kubectl -n $NAMESPACE_STANDARD get svc -l app=$APP_LABEL -o name 2>/dev/null || echo "")
-PVC_LIST=$(kubectl -n $NAMESPACE_STANDARD get pvc -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || echo "")
-POD_STATUS=$(kubectl -n $NAMESPACE_STANDARD get pods -l app=$APP_LABEL -o custom-columns=NAME:.metadata.name,STATUS:.status.phase --no-headers 2>/dev/null || echo "")
 
 # ------------------------------
 # HTML 头部
@@ -64,87 +55,44 @@ pre {background:#f0f2f5;padding:12px;border-radius:6px;overflow-x:auto;font-fami
 EOF
 
 # ------------------------------
-# 检测 Namespace
+# 根据 JSON 生成 HTML
 # ------------------------------
-cat >> "$HTML_FILE" <<EOF
-<h3>Namespace</h3>
-EOF
-if [[ -z "$EXIST_NAMESPACE" ]]; then
-    echo "<div class='status-missing'>❌ Namespace $NAMESPACE_STANDARD 不存在，需要创建</div>" >> "$HTML_FILE"
-else
-    echo "<div class='status-ok'>✅ Namespace $NAMESPACE_STANDARD 已存在</div>" >> "$HTML_FILE"
-fi
+RESOURCE_TYPES=("Namespace" "StatefulSet" "Service" "PVC" "Pod")
 
-# ------------------------------
-# 检测 StatefulSet
-# ------------------------------
-cat >> "$HTML_FILE" <<EOF
-<h3>StatefulSet</h3>
+for TYPE in "${RESOURCE_TYPES[@]}"; do
+    cat >> "$HTML_FILE" <<EOF
+<h3>$TYPE</h3>
 EOF
-if [[ -z "$STS_LIST" ]]; then
-    echo "<div class='status-missing'>❌ StatefulSet $STATEFULSET_STANDARD 不存在，需要创建</div>" >> "$HTML_FILE"
-else
-    for sts in $STS_LIST; do
-        NAME=$(echo $sts | awk -F'/' '{print $2}')
-        if [[ "$NAME" == "$STATEFULSET_STANDARD" ]]; then
-            echo "<div class='status-ok'>✅ StatefulSet $NAME 命名规范正确</div>" >> "$HTML_FILE"
-        else
-            echo "<div class='status-warning'>⚠️ StatefulSet $NAME 命名不规范，建议删除重建</div>" >> "$HTML_FILE"
-        fi
-    done
-fi
 
-# ------------------------------
-# 检测 Service
-# ------------------------------
-cat >> "$HTML_FILE" <<EOF
-<h3>Service</h3>
-EOF
-SERVICES_TO_CHECK=("$SERVICE_PRIMARY_STANDARD" "$SERVICE_REPLICA_STANDARD")
-for svc in "${SERVICES_TO_CHECK[@]}"; do
-    if echo "$SERVICE_LIST" | grep -q "/$svc"; then
-        echo "<div class='status-ok'>✅ Service $svc 已存在且命名规范正确</div>" >> "$HTML_FILE"
+    ITEMS=$(echo "$JSON_DATA" | jq -c ".[] | select(.resource_type==\"$TYPE\")")
+    if [ -z "$ITEMS" ]; then
+        echo "<div class='status-ok'>✅ 所有 $TYPE 正常</div>" >> "$HTML_FILE"
     else
-        echo "<div class='status-missing'>❌ Service $svc 不存在，需要创建</div>" >> "$HTML_FILE"
+        echo "$ITEMS" | while read -r item; do
+            NAME=$(echo "$item" | jq -r '.name')
+            STATUS=$(echo "$item" | jq -r '.status')
+            case "$STATUS" in
+                "不存在")
+                    CLASS="status-missing"
+                    ICON="❌"
+                    ;;
+                "命名不规范"|"Pending")
+                    CLASS="status-warning"
+                    ICON="⚠️"
+                    ;;
+                "Running")
+                    CLASS="status-ok"
+                    ICON="✅"
+                    ;;
+                *)
+                    CLASS="status-warning"
+                    ICON="⚠️"
+                    ;;
+            esac
+            echo "<div class='$CLASS'>$ICON $NAME : $STATUS</div>" >> "$HTML_FILE"
+        done
     fi
 done
-
-# ------------------------------
-# 检测 PVC
-# ------------------------------
-cat >> "$HTML_FILE" <<EOF
-<h3>PVC</h3>
-EOF
-if [[ -z "$PVC_LIST" ]]; then
-    echo "<div class='status-missing'>❌ PVC 未发现，需要创建</div>" >> "$HTML_FILE"
-else
-    for pvc in $PVC_LIST; do
-        if [[ "$pvc" == ${PVC_PATTERN}* ]]; then
-            echo "<div class='status-ok'>✅ PVC $pvc 命名规范正确</div>" >> "$HTML_FILE"
-        else
-            echo "<div class='status-warning'>⚠️ PVC $pvc 命名不规范，建议删除重建</div>" >> "$HTML_FILE"
-        fi
-    done
-fi
-
-# ------------------------------
-# 检测 Pod
-# ------------------------------
-cat >> "$HTML_FILE" <<EOF
-<h3>Pod 状态</h3>
-EOF
-if [[ -z "$POD_STATUS" ]]; then
-    echo "<div class='status-missing'>❌ Pod 未发现</div>" >> "$HTML_FILE"
-else
-    while read -r line; do
-        POD_NAME=$(echo $line | awk '{print $1}')
-        STATUS=$(echo $line | awk '{print $2}')
-        CASE_CLASS="status-missing"
-        [[ "$STATUS" == "Running" ]] && CASE_CLASS="status-ok"
-        [[ "$STATUS" == "Pending" ]] && CASE_CLASS="status-warning"
-        echo "<div class='$CASE_CLASS'>$POD_NAME : $STATUS</div>" >> "$HTML_FILE"
-    done <<< "$POD_STATUS"
-fi
 
 # ------------------------------
 # HTML Footer
