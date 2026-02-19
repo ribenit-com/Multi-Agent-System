@@ -3,10 +3,14 @@
 需要创建的内容，写出来放在html报告里，通过Yaml“创建”不需要在这里处理了 这边只检测命名规范混乱和汇报需要删除，新建的空间名。
 
 在生成一份Json格式的文件，
-字段1：Namespace
-字段2：ns-postgres-ha
-字段3：不存在
-数据所属：PostgreSQL
+[
+{"resource_type":"Namespace","name":"ns-postgres-ha","status":"不存在","app":"PostgreSQL"},
+{"resource_type":"StatefulSet","name":"sts-postgres-ha","status":"不存在","app":"PostgreSQL"},
+{"resource_type":"Service","name":"svc-postgres-primary","status":"不存在","app":"PostgreSQL"},
+{"resource_type":"Service","name":"svc-postgres-replica","status":"不存在","app":"PostgreSQL"},
+{"resource_type":"PVC","name":"pvc-postgres-ha*","status":"不存在","app":"PostgreSQL"},
+{"resource_type":"Pod","name":"*","status":"不存在","app":"PostgreSQL"}
+]
 我写的都是 例子数据，我需要这种格式的JSON
 目的是给另一个脚本读取，根据这个数据取删除和增加服务控件
 
