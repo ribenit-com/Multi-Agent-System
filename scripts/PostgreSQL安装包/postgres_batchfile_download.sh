@@ -5,7 +5,8 @@
 #   1. 下载主控脚本
 #   2. 下载 JSON 检测脚本
 #   3. 下载 HTML 报告脚本
-#   4. 赋可执行权限
+#   4. 下载 YAML 生成脚本
+#   5. 赋可执行权限
 # ===================================================
 
 set -e
@@ -32,4 +33,14 @@ chmod +x *.sh
 
 echo "✅ PostgreSQL HA 脚本下载完成"
 echo "📁 脚本目录: $WORK_DIR"
-echo "可执行主控脚本: ./postgres_control.sh \"PostgreSQL_HA\" ./check_postgres_names_json.sh"
+
+echo ""
+echo "正确调用方式示例："
+echo "./postgres_control.sh \"PostgreSQL_HA\" \"./gitops/postgres-ha\" ./check_postgres_names_json.sh"
+echo ""
+echo "✅ 解释："
+echo "\"PostgreSQL_HA\" → 模块名（可在日志和 GitOps 目录中使用）"
+echo "\"./gitops/postgres-ha\" → YAML 输出目录"
+echo "./check_postgres_names_json.sh → 生成 JSON 的检测脚本"
+echo ""
+echo "这样就不会再提示 Usage 报错了。"
