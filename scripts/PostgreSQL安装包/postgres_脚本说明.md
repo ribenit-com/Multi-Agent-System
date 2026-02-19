@@ -5,9 +5,7 @@
 chmod +x postgres_batchfile_download.sh
 ./postgres_batchfile_download.sh　```
 
-```
-　入口脚本执行：./postgres_control.sh "PostgreSQL_HA" ./check_postgres_names_json.sh
-```
+##　入口脚本执行：./postgres_control.sh "PostgreSQL_HA" ./check_postgres_names_json.sh
 
 
 
