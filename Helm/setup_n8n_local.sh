@@ -10,6 +10,13 @@ IMAGE="n8nio/n8n:2.8.2"
 TAR_FILE="n8n_2.8.2.tar"
 APP_NAME="n8n-ha"
 
+# 数据库信息（v12新增）
+DB_NAMESPACE="database"
+DB_SERVICE="postgres"
+DB_USER="myuser"
+DB_PASS="mypassword"
+DB_NAME="mydb"
+
 LOG_DIR="/mnt/truenas"
 HTML_FILE="$LOG_DIR/n8n-ha-delivery.html"
 
@@ -19,7 +26,7 @@ HTML_FILE="$LOG_DIR/n8n-ha-delivery.html"
 trap 'echo; echo "[FATAL] 第 $LINENO 行执行失败"; exit 1' ERR
 
 echo "================================================="
-echo "🚀 n8n HA 企业级 GitOps 自愈部署 v10.1 (Zero Crash)"
+echo "🚀 n8n HA 企业级 GitOps 自愈部署 v12.0 (DB Verified)"
 echo "================================================="
 
 ############################################
@@ -69,7 +76,7 @@ else
 fi
 
 ############################################
-# 4️⃣ GitOps 同步（容错）
+# 4️⃣ GitOps 同步
 ############################################
 echo "[GITOPS] 同步 Git"
 
@@ -121,7 +128,7 @@ EOF
 fi
 
 ############################################
-# 6️⃣ 收集交付数据（全部防崩溃）
+# 6️⃣ 收集交付数据
 ############################################
 
 mkdir -p "$LOG_DIR"
@@ -135,18 +142,37 @@ N8N_SERVICE_PORT=$(safe_kubectl get svc -n "$NAMESPACE" "$RELEASE" -o jsonpath='
 N8N_REPLICAS=$(safe_kubectl get deploy -n "$NAMESPACE" -l app.kubernetes.io/name=n8n -o jsonpath='{.items[0].spec.replicas}')
 POD_STATUS=$(safe_kubectl get pods -n "$NAMESPACE" -l app.kubernetes.io/name=n8n --no-headers)
 PVC_LIST=$(safe_kubectl get pvc -n "$NAMESPACE")
-
-if CLUSTER_RAW=$(kubectl version 2>/dev/null); then
-  CLUSTER_VERSION=$(echo "$CLUSTER_RAW" | tr '\n' ' ')
-else
-  CLUSTER_VERSION="N/A"
-fi
-
 GIT_COMMIT=$(git rev-parse --short HEAD 2>/dev/null || echo "N/A")
 ARGO_STATUS=$(safe_kubectl -n argocd get app "$APP_NAME" -o jsonpath='{.status.health.status}')
 
 ############################################
-# 7️⃣ 生成 HTML（保证永远生成）
+# 6.5️⃣ 数据库连通检测（v12）
+############################################
+
+DB_HOST="$DB_SERVICE.$DB_NAMESPACE.svc.cluster.local"
+
+DNS_STATUS="FAILED"
+TCP_STATUS="FAILED"
+AUTH_STATUS="FAILED"
+
+echo "[CHECK] 数据库连通性"
+
+kubectl run dns-test --rm -i --restart=Never \
+  --image=busybox -n "$NAMESPACE" \
+  -- nslookup "$DB_HOST" >/dev/null 2>&1 && DNS_STATUS="OK" || true
+
+kubectl run tcp-test --rm -i --restart=Never \
+  --image=busybox -n "$NAMESPACE" \
+  -- nc -z "$DB_HOST" 5432 >/dev/null 2>&1 && TCP_STATUS="OK" || true
+
+kubectl run auth-test --rm -i --restart=Never \
+  --image=postgres:15 -n "$NAMESPACE" \
+  -- env PGPASSWORD="$DB_PASS" \
+     psql -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME" -c '\q' \
+     >/dev/null 2>&1 && AUTH_STATUS="OK" || true
+
+############################################
+# 7️⃣ 生成 HTML
 ############################################
 
 cat > "$HTML_FILE" <<EOF
@@ -172,7 +198,7 @@ pre{background:#f1f3f5;padding:14px;border-radius:8px}
 <body>
 <div class="container">
 <div class="card">
-<h2>🚀 n8n HA 企业级交付报告 v10.1</h2>
+<h2>🚀 n8n HA 企业级交付报告 v12.0</h2>
 
 <h3>部署信息</h3>
 <p>Namespace: $NAMESPACE</p>
@@ -199,11 +225,14 @@ while read -r line; do
 done <<< "${POD_STATUS:-}"
 
 cat >> "$HTML_FILE" <<EOF
+
+<h3>数据库连通检测</h3>
+<p>DNS 解析: <b>${DNS_STATUS}</b></p>
+<p>TCP 5432: <b>${TCP_STATUS}</b></p>
+<p>认证登录: <b>${AUTH_STATUS}</b></p>
+
 <h3>PVC</h3>
 <pre>${PVC_LIST:-N/A}</pre>
-
-<h3>集群版本</h3>
-<pre>${CLUSTER_VERSION}</pre>
 
 <div class="footer">
 生成时间: $(date '+%Y-%m-%d %H:%M:%S')
@@ -219,4 +248,4 @@ echo
 echo "📄 企业交付报告生成完成:"
 echo "👉 $HTML_FILE"
 echo
-echo "🎉 v10.1 Zero Crash 执行完成"
+echo "🎉 v12.0 DB Verified 执行完成"
