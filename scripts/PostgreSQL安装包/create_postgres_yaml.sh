@@ -1,53 +1,183 @@
 #!/bin/bash
 # ===================================================
-# PostgreSQL HA 自动执行脚本（优化版）
-# 功能：
-#   - 下载 JSON/HTML/主控/YAML 生成脚本
-#   - 赋予可执行权限
-#   - 执行主控脚本生成 JSON + HTML + GitOps YAML
+# 脚本名称: generate_postgres_ha_yaml.sh
+# 功能: 根据检测 JSON 生成 PostgreSQL HA GitOps YAML 文件
+#       - 可配置副本数 & StorageClass
+#       - 从 stdin 读取 JSON
+#       - 输出目录直接可用于 ArgoCD/GitOps
 # ===================================================
 
-set -euo pipefail
-set -x
+set -e
 
 # -----------------------------
-# 配置目录
+# 参数设置
 # -----------------------------
-WORK_DIR=~/postgres_ha_scripts
-MODULE="PostgreSQL_HA"
-HTML_OUTPUT_DIR="/mnt/truenas/PostgreSQL安装报告书"
-
-mkdir -p "$WORK_DIR" "$HTML_OUTPUT_DIR"
-chmod 755 "$WORK_DIR" "$HTML_OUTPUT_DIR"
-cd "$WORK_DIR"
-
-# -----------------------------
-# 下载脚本
-# -----------------------------
-echo "⬇️ 下载 JSON 检测脚本"
-curl -fsSL "https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/PostgreSQL%E5%AE%89%E8%A3%85%E5%8C%85/check_postgres_names_json.sh" -o check_postgres_names_json.sh
-
-echo "⬇️ 下载 HTML 报告脚本"
-curl -fsSL "https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/PostgreSQL%E5%AE%89%E8%A3%85%E5%8C%85/check_postgres_names_html.sh" -o check_postgres_names_html.sh
-
-echo "⬇️ 下载主控脚本"
-curl -fsSL "https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/PostgreSQL%E5%AE%89%E8%A3%85%E5%8C%85/postgres_control.sh" -o postgres_control.sh
-
-echo "⬇️ 下载 YAML 生成脚本"
-curl -fsSL "https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/PostgreSQL%E5%AE%89%E8%A3%85%E5%8C%85/create_postgres_yaml.sh" -o create_postgres_yaml.sh
+REPLICA_COUNT="${1:-3}"                # 副本数，默认3
+STORAGE_CLASS="${2:-}"                 # StorageClass，可为空
+OUTPUT_DIR="${OUTPUT_DIR:-./gitops/postgres-ha}"  # 输出目录
+POSTGRES_USER="${POSTGRES_USER:-myuser}"
+POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-mypassword}"
+POSTGRES_DB="${POSTGRES_DB:-mydb}"
 
 # -----------------------------
-# 赋予可执行权限
+# 从 stdin 读取 JSON
 # -----------------------------
-chmod +x check_postgres_names_json.sh check_postgres_names_html.sh postgres_control.sh create_postgres_yaml.sh
+INPUT_JSON=$(cat)
 
 # -----------------------------
-# 执行主控脚本
+# 提取资源信息
 # -----------------------------
-echo "🔹 执行主控脚本"
-./postgres_control.sh "$MODULE" ./check_postgres_names_json.sh
+NAMESPACE=$(echo "$INPUT_JSON" | jq -r '.[] | select(.resource_type=="Namespace") | .name')
+STATEFULSET=$(echo "$INPUT_JSON" | jq -r '.[] | select(.resource_type=="StatefulSet") | .name')
+SERVICE_PRIMARY=$(echo "$INPUT_JSON" | jq -r '.[] | select(.resource_type=="Service") | select(.name|test("primary")) | .name')
+SERVICE_REPLICA=$(echo "$INPUT_JSON" | jq -r '.[] | select(.resource_type=="Service") | select(.name|test("replica")) | .name')
 
-echo ""
-echo "✅ PostgreSQL HA 主控执行完成"
-echo "📁 HTML 报告目录: $HTML_OUTPUT_DIR"
-echo "📁 脚本工作目录: $WORK_DIR"
+# PVC 列表
+readarray -t PVC_NAMES <<< "$(echo "$INPUT_JSON" | jq -r '.[] | select(.resource_type=="PVC") | .name')"
+
+# -----------------------------
+# 创建输出目录
+# -----------------------------
+mkdir -p "$OUTPUT_DIR"
+
+# -----------------------------
+# 生成 Namespace YAML
+# -----------------------------
+cat > "$OUTPUT_DIR/namespace.yaml" <<EOF
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: $NAMESPACE
+EOF
+
+# -----------------------------
+# 生成 StatefulSet YAML
+# -----------------------------
+cat > "$OUTPUT_DIR/statefulset.yaml" <<EOF
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: $STATEFULSET
+  namespace: $NAMESPACE
+  labels:
+    app: postgres-ha
+spec:
+  serviceName: $SERVICE_REPLICA
+  replicas: $REPLICA_COUNT
+  selector:
+    matchLabels:
+      app: postgres-ha
+  template:
+    metadata:
+      labels:
+        app: postgres-ha
+    spec:
+      containers:
+        - name: postgres
+          image: "docker.m.daocloud.io/library/postgres:16.3"
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: POSTGRES_USER
+              value: "$POSTGRES_USER"
+            - name: POSTGRES_PASSWORD
+              value: "$POSTGRES_PASSWORD"
+            - name: POSTGRES_DB
+              value: "$POSTGRES_DB"
+          ports:
+            - containerPort: 5432
+              name: postgres
+          volumeMounts:
+EOF
+
+for pvc in "${PVC_NAMES[@]}"; do
+cat >> "$OUTPUT_DIR/statefulset.yaml" <<EOF
+            - name: $pvc
+              mountPath: /var/lib/postgresql/data
+EOF
+done
+
+cat >> "$OUTPUT_DIR/statefulset.yaml" <<EOF
+  volumeClaimTemplates:
+EOF
+
+for pvc in "${PVC_NAMES[@]}"; do
+cat >> "$OUTPUT_DIR/statefulset.yaml" <<EOF
+    - metadata:
+        name: $pvc
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 5Gi
+EOF
+if [ -n "$STORAGE_CLASS" ]; then
+cat >> "$OUTPUT_DIR/statefulset.yaml" <<EOF
+        storageClassName: $STORAGE_CLASS
+EOF
+fi
+done
+
+# -----------------------------
+# 生成主库 Service YAML
+# -----------------------------
+cat > "$OUTPUT_DIR/service-primary.yaml" <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: $SERVICE_PRIMARY
+  namespace: $NAMESPACE
+spec:
+  type: ClusterIP
+  selector:
+    app: postgres-ha
+  ports:
+    - port: 5432
+      targetPort: 5432
+      name: postgres
+EOF
+
+# -----------------------------
+# 生成副本 Headless Service YAML
+# -----------------------------
+cat > "$OUTPUT_DIR/service-replica.yaml" <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: $SERVICE_REPLICA
+  namespace: $NAMESPACE
+spec:
+  clusterIP: None
+  selector:
+    app: postgres-ha
+  ports:
+    - port: 5432
+      targetPort: 5432
+      name: postgres
+EOF
+
+# -----------------------------
+# 生成手动 PV（如果没有 StorageClass）
+# -----------------------------
+if [ -z "$STORAGE_CLASS" ]; then
+  echo "=== 生成手动 PV ==="
+  for i in $(seq 0 $(($REPLICA_COUNT-1))); do
+    PV_NAME="postgres-pv-$i"
+    mkdir -p /mnt/data/postgres-$i
+    cat > "$OUTPUT_DIR/$PV_NAME.yaml" <<EOF
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: $PV_NAME
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: /mnt/data/postgres-$i
+  persistentVolumeReclaimPolicy: Retain
+EOF
+  done
+fi
+
+echo "✅ PostgreSQL HA GitOps YAML 已生成在 $OUTPUT_DIR"
