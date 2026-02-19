@@ -1,8 +1,9 @@
 #!/bin/bash
 # ===================================================
 # 脚本名称: generate_postgres_ha_yaml.sh
-# 功能: 根据企业级命名规则生成 PostgreSQL HA Helm Chart YAML 文件
-# 用途: 自动生成 namespace / StatefulSet / Services / PVC 对应 YAML
+# 功能: 根据检测 JSON 生成 PostgreSQL HA Helm Chart YAML 文件
+#       - 从 stdin 接收 JSON
+#       - 动态生成 Namespace / StatefulSet / Services / PVC
 # ===================================================
 
 set -e
@@ -19,15 +20,22 @@ POSTGRES_USER="${POSTGRES_USER:-myuser}"
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-mypassword}"
 POSTGRES_DB="${POSTGRES_DB:-mydb}"
 
-# 命名规范
-NAMESPACE="ns-postgres-ha"
-STATEFULSET="sts-postgres-ha"
-SERVICE_PRIMARY="svc-postgres-primary"
-SERVICE_REPLICA="svc-postgres-replica"
-POD_PREFIX="sts-postgres-ha"
+# -----------------------------
+# 从 stdin 读取 JSON
+# -----------------------------
+INPUT_JSON=$(cat)
 
-# PVC 名称列表（与 Pod 一一对应）
-PVC_NAMES=("pvc-postgres-ha-0" "pvc-postgres-ha-1" "pvc-postgres-ha-2")
+# -----------------------------
+# 根据 JSON 提取资源信息
+# -----------------------------
+NAMESPACE=$(echo "$INPUT_JSON" | jq -r '.[] | select(.resource_type=="Namespace") | .name')
+STATEFULSET=$(echo "$INPUT_JSON" | jq -r '.[] | select(.resource_type=="StatefulSet") | .name')
+SERVICE_PRIMARY=$(echo "$INPUT_JSON" | jq -r '.[] | select(.resource_type=="Service") | select(.name|test("primary")) | .name')
+SERVICE_REPLICA=$(echo "$INPUT_JSON" | jq -r '.[] | select(.resource_type=="Service") | select(.name|test("replica")) | .name')
+POD_PREFIX="$STATEFULSET"
+
+# PVC 名称列表
+readarray -t PVC_NAMES <<< "$(echo "$INPUT_JSON" | jq -r '.[] | select(.resource_type=="PVC") | .name')"
 
 # -----------------------------
 # 创建输出目录
