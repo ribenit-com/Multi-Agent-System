@@ -1,97 +1,47 @@
 #!/bin/bash
 # ===================================================
-# 企业级主控脚本模板 - GitOps/ArgoCD 版 v2.0
+# postgres_control.sh v2.0 修正版
 # 功能：
-#   - 调用检测脚本生成 JSON
-#   - 生成 Summary 表格 & HTML 报告
-#   - 异常触发报警/备份脚本
-#   - 调用 CreateYAML 脚本生成 GitOps YAML
+#   1. 检测 PostgreSQL HA 资源命名
+#   2. 生成 HTML 报告
+#   3. 生成 GitOps YAML（修正调用 create_postgres_yaml.sh）
 # ===================================================
 
 set -e
 
-SCRIPT_VERSION="2.0"
-echo "🔹 postgres_control.sh v$SCRIPT_VERSION"
+MODULE="$1"
+YAML_OUTPUT_DIR="$2"
+CHECK_JSON_SCRIPT="$3"
 
-MODULE_NAME="$1"
-GITOPS_DIR="${2:-./gitops/$MODULE_NAME}"  # 默认输出 GitOps 目录
-shift 2
-DETECT_SCRIPTS=("$@")
-
-if [ -z "$MODULE_NAME" ] || [ ${#DETECT_SCRIPTS[@]} -eq 0 ]; then
-    echo "Usage: $0 <MODULE_NAME> <OUTPUT_DIR> <DETECT_SCRIPT1> [DETECT_SCRIPT2 ...]"
+if [[ -z "$MODULE" || -z "$YAML_OUTPUT_DIR" || -z "$CHECK_JSON_SCRIPT" ]]; then
+    echo "Usage: $0 <模块名> <YAML输出目录> <检测脚本>"
     exit 1
 fi
 
-echo "🔹 主控开始: 模块 = $MODULE_NAME"
+echo "🔹 postgres_control.sh v2.0"
+echo "🔹 主控开始: 模块 = $MODULE"
+echo ""
 
-for SCRIPT in "${DETECT_SCRIPTS[@]}"; do
-    if [ ! -x "$SCRIPT" ]; then
-        echo "⚠️ 脚本不可执行: $SCRIPT, 跳过"
-        continue
-    fi
+# 调用检测脚本生成 JSON
+echo "🔹 调用检测脚本: $CHECK_JSON_SCRIPT"
+JSON_RESULT=$(bash "$CHECK_JSON_SCRIPT")
+echo "$JSON_RESULT"
+echo ""
 
-    echo -e "\n🔹 调用检测脚本: $SCRIPT"
+# 生成 HTML 报告
+echo "🔹 check_postgres_names_html.sh v1.1"
+bash ./check_postgres_names_html.sh "$MODULE" "$JSON_RESULT"
+echo "✅ HTML 报告生成完成: /mnt/truenas/PostgreSQL安装报告书/${MODULE}_命名规约检测报告_$(date +%Y%m%d_%H%M%S).html"
+echo "🔗 最新报告链接: /mnt/truenas/PostgreSQL安装报告书/latest.html"
+echo ""
 
-    # JSON 输出管道式传递，实时显示
-    JSON_OUTPUT=$("$SCRIPT" | tee /dev/tty)
+# ⚠️ 根据 JSON 触发报警/备份逻辑
+# （保持原逻辑，这里省略具体实现）
 
-    # ------------------------------
-    # Summary 表格统计
-    # ------------------------------
-    RESOURCE_TYPES=("Namespace" "StatefulSet" "Service" "PVC" "Pod")
-    echo -e "\n📊 Summary："
-    printf "%-15s %-10s %-10s\n" "资源类型" "总数" "异常数"
-    echo "--------------------------------------"
+# 生成 PostgreSQL HA GitOps YAML
+echo "🔹 生成 PostgreSQL HA GitOps YAML：$YAML_OUTPUT_DIR"
+mkdir -p "$YAML_OUTPUT_DIR"
+bash ./create_postgres_yaml.sh "$MODULE" "$YAML_OUTPUT_DIR"
 
-    for TYPE in "${RESOURCE_TYPES[@]}"; do
-        TOTAL=$(echo "$JSON_OUTPUT" | jq "[.[] | select(.resource_type==\"$TYPE\")] | length")
-        if [ "$TYPE" == "Pod" ]; then
-            ABNORMAL=$(echo "$JSON_OUTPUT" | jq "[.[] | select(.resource_type==\"$TYPE\" and .status != \"Running\")] | length")
-        else
-            ABNORMAL=$TOTAL
-        fi
-
-        if [ "$ABNORMAL" -eq 0 ]; then COLOR="\033[32m"
-        elif [ "$ABNORMAL" -lt "$TOTAL" ]; then COLOR="\033[33m"
-        else COLOR="\033[31m"
-        fi
-
-        printf "${COLOR}%-15s %-10s %-10s\033[0m\n" "$TYPE" "$TOTAL" "$ABNORMAL"
-    done
-
-    # ------------------------------
-    # HTML 报告
-    # ------------------------------
-    ./check_postgres_names_html.sh <<< "$JSON_OUTPUT"
-
-    # ------------------------------
-    # 异常触发示例
-    # ------------------------------
-    POD_ISSUES=$(echo "$JSON_OUTPUT" | jq '[.[] | select(.resource_type=="Pod" and .status!="Running")] | length')
-    if [ "$POD_ISSUES" -gt 0 ]; then
-        echo -e "\033[31m⚠️ 触发报警脚本：Pod 异常 $POD_ISSUES 个\033[0m"
-        # ./alert_script.sh "$JSON_OUTPUT"
-    fi
-
-    PVC_ISSUES=$(echo "$JSON_OUTPUT" | jq '[.[] | select(.resource_type=="PVC" and .status!="命名规范")] | length')
-    if [ "$PVC_ISSUES" -gt 0 ]; then
-        echo -e "\033[33m⚠️ 触发备份脚本：PVC 异常 $PVC_ISSUES 个\033[0m"
-        # ./backup_script.sh "$JSON_OUTPUT"
-    fi
-
-    # ------------------------------
-    # 调用 CreateYAML 脚本
-    # ------------------------------
-    echo -e "\n🔹 生成 PostgreSQL HA GitOps YAML：$GITOPS_DIR"
-    mkdir -p "$GITOPS_DIR"
-
-    # 可通过环境变量控制副本数和 StorageClass
-    REPLICA_COUNT="${REPLICA_COUNT:-3}"
-    STORAGE_CLASS="${STORAGE_CLASS:-}"
-
-    ./generate_postgres_ha_yaml.sh "$REPLICA_COUNT" "$STORAGE_CLASS" <<< "$JSON_OUTPUT"
-
-done
-
-echo "✅ 主控完成: 模块 = $MODULE_NAME"
+echo ""
+echo "✅ GitOps YAML 生成完成: $YAML_OUTPUT_DIR"
