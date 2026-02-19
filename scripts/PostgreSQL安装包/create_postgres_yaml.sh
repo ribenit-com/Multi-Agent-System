@@ -1,21 +1,20 @@
 #!/bin/bash
 # ===================================================
 # 脚本名称: generate_postgres_ha_yaml.sh
-# 功能: 根据检测 JSON 生成 PostgreSQL HA Helm Chart YAML 文件
-#       - 从 stdin 接收 JSON
-#       - 动态生成 Namespace / StatefulSet / Services / PVC
+# 功能: 根据检测 JSON 生成 PostgreSQL HA GitOps YAML 文件
+#       - 可配置副本数 & StorageClass
+#       - 从 stdin 读取 JSON
+#       - 输出目录直接可用于 ArgoCD/GitOps
 # ===================================================
 
 set -e
 
 # -----------------------------
-# 配置参数（可修改）
+# 参数设置
 # -----------------------------
-OUTPUT_DIR="${OUTPUT_DIR:-./postgres-ha-yaml}"  # 输出目录
-REPLICA_COUNT="${REPLICA_COUNT:-3}"            # 副本数 2~3
-PVC_SIZE="${PVC_SIZE:-5Gi}"                     # PVC 大小
-STORAGE_CLASS="${STORAGE_CLASS:-}"             # StorageClass，如果为空使用 hostPath PV
-
+REPLICA_COUNT="${1:-3}"                # 副本数，默认3
+STORAGE_CLASS="${2:-}"                 # StorageClass，可为空
+OUTPUT_DIR="${OUTPUT_DIR:-./gitops/postgres-ha}"  # 输出目录
 POSTGRES_USER="${POSTGRES_USER:-myuser}"
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-mypassword}"
 POSTGRES_DB="${POSTGRES_DB:-mydb}"
@@ -26,15 +25,14 @@ POSTGRES_DB="${POSTGRES_DB:-mydb}"
 INPUT_JSON=$(cat)
 
 # -----------------------------
-# 根据 JSON 提取资源信息
+# 提取资源信息
 # -----------------------------
 NAMESPACE=$(echo "$INPUT_JSON" | jq -r '.[] | select(.resource_type=="Namespace") | .name')
 STATEFULSET=$(echo "$INPUT_JSON" | jq -r '.[] | select(.resource_type=="StatefulSet") | .name')
 SERVICE_PRIMARY=$(echo "$INPUT_JSON" | jq -r '.[] | select(.resource_type=="Service") | select(.name|test("primary")) | .name')
 SERVICE_REPLICA=$(echo "$INPUT_JSON" | jq -r '.[] | select(.resource_type=="Service") | select(.name|test("replica")) | .name')
-POD_PREFIX="$STATEFULSET"
 
-# PVC 名称列表
+# PVC 列表
 readarray -t PVC_NAMES <<< "$(echo "$INPUT_JSON" | jq -r '.[] | select(.resource_type=="PVC") | .name')"
 
 # -----------------------------
@@ -110,7 +108,7 @@ cat >> "$OUTPUT_DIR/statefulset.yaml" <<EOF
         accessModes: ["ReadWriteOnce"]
         resources:
           requests:
-            storage: $PVC_SIZE
+            storage: 5Gi
 EOF
 if [ -n "$STORAGE_CLASS" ]; then
 cat >> "$OUTPUT_DIR/statefulset.yaml" <<EOF
@@ -172,7 +170,7 @@ metadata:
   name: $PV_NAME
 spec:
   capacity:
-    storage: $PVC_SIZE
+    storage: 5Gi
   accessModes:
     - ReadWriteOnce
   hostPath:
@@ -182,4 +180,4 @@ EOF
   done
 fi
 
-echo "✅ PostgreSQL HA YAML 文件已生成在 $OUTPUT_DIR 目录"
+echo "✅ PostgreSQL HA GitOps YAML 已生成在 $OUTPUT_DIR"
