@@ -5,7 +5,7 @@ set -Eeuo pipefail
 # 基础变量
 ############################################
 NAMESPACE="automation"
-APP_NAME="n8n"
+APP_NAME="n8n-ha"
 IMAGE="n8nio/n8n:2.8.2"
 TAR_FILE="n8n_2.8.2.tar"
 GITOPS_DIR="./n8n-gitops"
@@ -20,13 +20,10 @@ DB_NAME="mydb"
 LOG_DIR="/mnt/truenas"
 HTML_FILE="$LOG_DIR/n8n-ha-delivery.html"
 
-############################################
-# 错误捕获
-############################################
 trap 'echo; echo "[FATAL] 第 $LINENO 行执行失败"; exit 1' ERR
 
 echo "================================================="
-echo "🚀 n8n HA 完整本地部署自容脚本 v3.0 (YAML生成 + ArgoCD + 健康检查 + HTML报告)"
+echo "🚀 n8n HA 完整本地部署自容脚本 v4.0"
 echo "================================================="
 
 ############################################
@@ -36,24 +33,24 @@ echo "[CHECK] Kubernetes API"
 kubectl version --client >/dev/null 2>&1 || kubectl version >/dev/null 2>&1 || true
 
 ############################################
-# 1️⃣ containerd 镜像检查（本地存在即可）
+# 1️⃣ containerd 镜像检查（本地存在即可，显示导入进度）
 ############################################
 echo "[CHECK] containerd 镜像"
-IMAGE_NAME_ONLY="${IMAGE##*/}"
+IMAGE_NAME_ONLY="${IMAGE##*/}"   # n8n:2.8.2
 
 if sudo ctr -n k8s.io images list 2>/dev/null | grep -q "$IMAGE_NAME_ONLY"; then
     echo "[OK] 镜像已存在: $IMAGE_NAME_ONLY"
 else
     if [ -f "$TAR_FILE" ]; then
-        echo "[INFO] 镜像 tar 存在，导入镜像..."
+        echo "[INFO] 本地 tar 存在，导入镜像到 containerd..."
         if command -v pv >/dev/null 2>&1; then
-            pv "$TAR_FILE" | sudo ctr -n k8s.io images import - || true
+            sudo pv "$TAR_FILE" | sudo ctr -n k8s.io images import -
         else
-            sudo ctr -n k8s.io images import "$TAR_FILE" || true
+            sudo ctr -n k8s.io images import "$TAR_FILE"
         fi
         echo "[OK] 镜像导入完成"
     else
-        echo "[WARN] 本地 tar 不存在，镜像无法拉取，请手动准备 $TAR_FILE"
+        echo "[WARN] 本地 tar 不存在，请手动准备 $TAR_FILE"
     fi
 fi
 
@@ -83,23 +80,39 @@ stringData:
   password: $DB_PASS
 EOF
 
+# service.yaml
+cat > "$GITOPS_DIR/service.yaml" <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: n8n
+  namespace: $NAMESPACE
+spec:
+  selector:
+    app: n8n
+  ports:
+    - port: 5678
+      targetPort: 5678
+  type: ClusterIP
+EOF
+
 # statefulset.yaml
 cat > "$GITOPS_DIR/statefulset.yaml" <<EOF
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: $APP_NAME
+  name: n8n
   namespace: $NAMESPACE
 spec:
-  serviceName: $APP_NAME
+  serviceName: n8n
   replicas: 2
   selector:
     matchLabels:
-      app: $APP_NAME
+      app: n8n
   template:
     metadata:
       labels:
-        app: $APP_NAME
+        app: n8n
     spec:
       initContainers:
         - name: wait-for-postgres
@@ -113,7 +126,7 @@ spec:
                 sleep 3
               done
       containers:
-        - name: $APP_NAME
+        - name: n8n
           image: $IMAGE
           ports:
             - containerPort: 5678
@@ -135,6 +148,12 @@ spec:
                   key: password
             - name: EXECUTIONS_MODE
               value: regular
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
           readinessProbe:
             httpGet:
               path: /healthz
@@ -150,6 +169,16 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /home/node/.n8n
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - n8n
+              topologyKey: kubernetes.io/hostname
   volumeClaimTemplates:
     - metadata:
         name: data
@@ -160,28 +189,12 @@ spec:
             storage: 10Gi
 EOF
 
-# service.yaml
-cat > "$GITOPS_DIR/service.yaml" <<EOF
-apiVersion: v1
-kind: Service
-metadata:
-  name: $APP_NAME
-  namespace: $NAMESPACE
-spec:
-  selector:
-    app: $APP_NAME
-  ports:
-    - port: 5678
-      targetPort: 5678
-  type: ClusterIP
-EOF
-
 # ingress.yaml
 cat > "$GITOPS_DIR/ingress.yaml" <<EOF
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: $APP_NAME
+  name: n8n
   namespace: $NAMESPACE
 spec:
   rules:
@@ -192,25 +205,13 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: $APP_NAME
+                name: n8n
                 port:
                   number: 5678
 EOF
 
-echo "[OK] YAML 文件生成完成"
-
-############################################
-# 3️⃣ 本地安装 YAML
-############################################
-kubectl apply -f "$GITOPS_DIR/" || true
-echo "[OK] GitOps YAML 已应用"
-
-############################################
-# 4️⃣ ArgoCD Application 创建
-############################################
-if kubectl get ns argocd >/dev/null 2>&1; then
-    echo "[ARGOCD] 创建/更新 Application"
-    cat <<EOF | kubectl apply -f - >/dev/null 2>&1 || true
+# argocd-application.yaml
+cat > "$GITOPS_DIR/argocd-application.yaml" <<EOF
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
@@ -219,9 +220,9 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: https://github.com/YOUR_REPO/n8n-gitops
+    repoURL: "" # 本地部署，无需填写
     targetRevision: main
-    path: .
+    path: $GITOPS_DIR
   destination:
     server: https://kubernetes.default.svc
     namespace: $NAMESPACE
@@ -230,8 +231,22 @@ spec:
       prune: true
       selfHeal: true
 EOF
-    echo "[OK] ArgoCD Application 已创建/更新"
-fi
+
+echo "[OK] YAML 文件生成完成"
+
+############################################
+# 3️⃣ 本地 kubectl apply
+############################################
+echo "[INSTALL] 应用 YAML 到 Kubernetes"
+kubectl apply -f "$GITOPS_DIR/" || true
+echo "[OK] GitOps YAML 已应用"
+
+############################################
+# 4️⃣ ArgoCD Application 创建/更新
+############################################
+echo "[ARGOCD] 创建/更新 Application"
+kubectl apply -f "$GITOPS_DIR/argocd-application.yaml" || true
+echo "[OK] ArgoCD Application 已创建/更新"
 
 ############################################
 # 5️⃣ Pod 就绪检查
@@ -242,8 +257,8 @@ SLEEP_INTERVAL=5
 ELAPSED=0
 
 while true; do
-  READY_COUNT=$(kubectl get pods -n "$NAMESPACE" -l app=$APP_NAME --no-headers 2>/dev/null | grep -c "Running")
-  TOTAL_COUNT=$(kubectl get pods -n "$NAMESPACE" -l app=$APP_NAME --no-headers 2>/dev/null | wc -l)
+  READY_COUNT=$(kubectl get pods -n "$NAMESPACE" -l app=n8n --no-headers 2>/dev/null | grep -c "Running")
+  TOTAL_COUNT=$(kubectl get pods -n "$NAMESPACE" -l app=n8n --no-headers 2>/dev/null | wc -l)
 
   if [[ "$TOTAL_COUNT" -gt 0 && "$READY_COUNT" -eq "$TOTAL_COUNT" ]]; then
       echo "[OK] 所有 n8n Pod 已就绪 ($READY_COUNT/$TOTAL_COUNT)"
@@ -260,10 +275,10 @@ while true; do
 done
 
 ############################################
-# 6️⃣ 服务端口访问检查
+# 6️⃣ 服务端口 & 数据库检查
 ############################################
-SERVICE_IP=$(kubectl get svc -n "$NAMESPACE" $APP_NAME -o jsonpath='{.spec.clusterIP}')
-SERVICE_PORT=$(kubectl get svc -n "$NAMESPACE" $APP_NAME -o jsonpath='{.spec.ports[0].port}')
+SERVICE_IP=$(kubectl get svc -n "$NAMESPACE" n8n -o jsonpath='{.spec.clusterIP}')
+SERVICE_PORT=$(kubectl get svc -n "$NAMESPACE" n8n -o jsonpath='{.spec.ports[0].port}')
 
 echo "[CHECK] 服务端口访问..."
 if nc -z -w 5 "$SERVICE_IP" "$SERVICE_PORT"; then
@@ -274,21 +289,15 @@ else
     SERVICE_STATUS="FAILED"
 fi
 
-############################################
-# 7️⃣ 数据库连通性检查
-############################################
-DB_HOST="$DB_SERVICE.$DB_NAMESPACE.svc.cluster.local"
-
 echo "[CHECK] 数据库连通性..."
 kubectl run db-test --rm -i --restart=Never \
   --image=postgres:15 -n "$NAMESPACE" \
   --env PGPASSWORD="$DB_PASS" \
-  --command -- psql -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME" -c '\q' >/dev/null 2>&1 && DB_STATUS="OK" || DB_STATUS="FAILED"
-
+  --command -- psql -h "$DB_SERVICE.$DB_NAMESPACE.svc.cluster.local" -U "$DB_USER" -d "$DB_NAME" -c '\q' >/dev/null 2>&1 && DB_STATUS="OK" || DB_STATUS="FAILED"
 echo "[INFO] 数据库状态: $DB_STATUS"
 
 ############################################
-# 8️⃣ HTML 报告生成
+# 7️⃣ HTML 报告生成
 ############################################
 mkdir -p "$LOG_DIR"
 
