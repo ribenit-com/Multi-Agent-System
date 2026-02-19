@@ -1,5 +1,5 @@
 # MarkDown
-``` 给我MarkDown, 纯文本格式代码块```
+``` 给我MarkDown, 纯文本格式代码块，一下子可以COPY的那一种```
 
 # Git
 ```
