@@ -1,0 +1,78 @@
+============================================================
+# 企业级 Kubernetes / PostgreSQL HA 架构手册
+版本: 1.1 | 状态: 生产可用
+============================================================
+
+## 1. 总体设计原则
+- **统一前缀**：采用 `<资源缩写>-<组件名>-<角色>` 的结构
+- **语义化**：全小写字母，使用中划线 `-` 分隔，禁用下划线
+- **可观测性**：规范命名便于 Prometheus 指标过滤与日志分类
+- **运维友好**：在 ArgoCD 中可快速识别资源层级与依赖
+
+---
+
+## 2. Namespace (命名空间) 规范
+- **格式**：`ns-<层级>-<功能>`
+
+| 层级 | Namespace 示例 | 描述 | 包含典型组件 |
+|------|----------------|------|---------------|
+| 系统层 | ns-sys-edge | 核心系统/边缘组件 | KubeEdge, Flannel, CoreDNS |
+| 中间件 | ns-mid-storage | 存储与中间件层 | PostgreSQL, Redis, MinIO |
+| 应用层 | ns-app-workflow | 业务逻辑/工作流 | n8n, Dify, Airflow |
+| 模型层 | ns-mod-ai | AI 模型推理/向量库 | Ollama, DeepSeek, Milvus |
+
+---
+
+## 3. 核心资源对象命名 (Workloads & Services)
+- **格式**：`<类型缩写>-<组件名>-<角色>[-<序号/环境>]`
+
+### 3.1 类型缩写对照表
+| 缩写 | 类型 |
+|------|------|
+| dep  | Deployment (无状态) |
+| sts  | StatefulSet (有状态) |
+| svc  | Service |
+| pvc  | PersistentVolumeClaim |
+| cm   | ConfigMap |
+| sec  | Secret |
+| ing  | Ingress |
+
+### 3.2 典型示例对照表
+| 组件名称 | Deployment / StatefulSet | Service 名称 | PVC 名称 |
+|----------|-------------------------|--------------|-----------|
+| KubeEdge | dep-edge-cloudcore | svc-edge-cloudcore | pvc-edge-config |
+| PostgreSQL | sts-postgresql-ha | svc-postgresql-primary | pvc-postgresql-data-0 |
+| PostgreSQL | - | svc-postgresql-replica | pvc-postgresql-data-1 |
+| Redis | sts-redis-cluster | svc-redis-master | pvc-redis-data-0 |
+| n8n | dep-n8n-engine | svc-n8n-api | pvc-n8n-shared |
+| Dify | dep-dify-server | svc-dify-api | pvc-dify-storage |
+| Ollama | dep-ollama-engine | svc-ollama-endpoint | pvc-ollama-lib |
+| DeepSeek | dep-deepseek-llm | svc-deepseek-api | pvc-deepseek-models |
+
+---
+
+## 4. 存储与基础设施规范
+
+### 4.1 StorageClass (SC)
+- **格式**：`sc-<介质>-<用途/性能>`
+- 示例：
+  - `sc-ssd-high` : 高性能 SSD，适用于数据库  
+  - `sc-nas-shared` : 共享文件存储，适用于工作流附件  
+  - `sc-gpu-cache` : 专用模型缓存存储 (GPU 节点本地盘)  
+
+### 4.2 Node Label (节点标签)
+- **格式**：`infra/=`  
+- 示例：
+  - `infra/node-type=edge` : 边缘计算节点  
+  - `infra/node-type=gpu` : AI 推理/显卡节点  
+  - `infra/node-type=data` : 数据库/缓存专用节点  
+  - `infra/project=enterprise-ai` : 项目归属标识  
+
+---
+
+## 5. 运维巡检脚本 (Snippet)
+
+### 5.1 违规资源检测
+查找不符合命名规范的常用资源 (过滤系统预留)
+```bash
+kubectl get deploy,sts,svc,pvc -A | grep -vE '^(dep-|sts-|svc-|pvc-|NAME|kube-system|calico)'
