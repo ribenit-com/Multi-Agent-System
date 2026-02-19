@@ -26,7 +26,7 @@ HTML_FILE="$LOG_DIR/n8n-ha-delivery.html"
 trap 'echo; echo "[FATAL] 第 $LINENO 行执行失败"; exit 1' ERR
 
 echo "================================================="
-echo "🚀 n8n HA 企业级 GitOps 自愈部署 v12.3 (Image Auto-Fix + DB Verified)"
+echo "🚀 n8n HA 企业级 GitOps 自愈部署 v12.4 (Image Auto-Fix + DB Verified)"
 echo "================================================="
 
 ############################################
@@ -40,9 +40,13 @@ kubectl version --client >/dev/null 2>&1 || kubectl version >/dev/null 2>&1 || t
 ############################################
 echo "[CHECK] containerd 镜像"
 
-IMAGE_NAME_ONLY="${IMAGE##*/}"  # 去掉 registry 前缀，只匹配镜像名
+# 只保留镜像名和 tag，忽略 registry 前缀
+IMAGE_NAME_ONLY="${IMAGE##*/}"   # 例如 n8n:2.8.2
 
-if ! sudo ctr -n k8s.io images list 2>/dev/null | grep -q "$IMAGE_NAME_ONLY"; then
+# 检查镜像是否已经存在
+if sudo ctr -n k8s.io images list 2>/dev/null | grep -q "$IMAGE_NAME_ONLY"; then
+    echo "[OK] 镜像已存在: $IMAGE_NAME_ONLY"
+else
     if [ -f "$TAR_FILE" ]; then
         echo "[INFO] 镜像 tar 存在，直接导入到 k8s.io..."
         if command -v pv >/dev/null 2>&1; then
@@ -60,8 +64,6 @@ if ! sudo ctr -n k8s.io images list 2>/dev/null | grep -q "$IMAGE_NAME_ONLY"; th
             exit 1
         fi
     fi
-else
-    echo "[OK] 镜像已存在: $IMAGE_NAME_ONLY"
 fi
 
 ############################################
@@ -201,7 +203,7 @@ pre{background:#f1f3f5;padding:14px;border-radius:8px}
 <body>
 <div class="container">
 <div class="card">
-<h2>🚀 n8n HA 企业级交付报告 v12.3</h2>
+<h2>🚀 n8n HA 企业级交付报告 v12.4</h2>
 
 <h3>部署信息</h3>
 <p>Namespace: $NAMESPACE</p>
@@ -251,4 +253,4 @@ echo
 echo "📄 企业交付报告生成完成:"
 echo "👉 $HTML_FILE"
 echo
-echo "🎉 v12.3 Image Auto-Fix + DB Verified 执行完成"
+echo "🎉 v12.4 Image Auto-Fix + DB Verified 执行完成"
