@@ -4,6 +4,7 @@
 # 功能: 根据 JSON 数据生成 PostgreSQL HA 命名规约 HTML 报告
 #       - 支持标准输入或 JSON 文件路径
 #       - 实时在终端输出关键状态
+#       - 自动生成最新报告快捷链接 latest.html
 # ===================================================
 
 set -e
@@ -23,12 +24,18 @@ else
 fi
 
 # ------------------------------
-# 报告目录
+# 报告目录和文件名（企业级规范 + 时间戳）
 # ------------------------------
 BASE_DIR="/mnt/truenas"
 REPORT_DIR="$BASE_DIR/PostgreSQL安装报告书"
 mkdir -p "$REPORT_DIR"
-HTML_FILE="$REPORT_DIR/PostgreSQL安装报告书-命名规约检测报告书.html"
+
+MODULE_NAME="PostgreSQL_HA"
+DESCRIPTION="命名规约检测报告"
+TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
+
+HTML_FILE="$REPORT_DIR/${MODULE_NAME}_${DESCRIPTION}_$TIMESTAMP.html"
+LATEST_FILE="$REPORT_DIR/latest.html"
 
 # ------------------------------
 # HTML 头部
@@ -38,7 +45,7 @@ cat > "$HTML_FILE" <<EOF
 <html lang="zh">
 <head>
 <meta charset="UTF-8">
-<title>PostgreSQL 命名规约检测报告</title>
+<title>${MODULE_NAME} 命名规约检测报告</title>
 <style>
 body {margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f5f7fa}
 .container {display:flex;justify-content:center;align-items:flex-start;padding:30px}
@@ -54,7 +61,7 @@ pre {background:#f0f2f5;padding:12px;border-radius:6px;overflow-x:auto;font-fami
 <body>
 <div class="container">
 <div class="card">
-<h2>🎯 PostgreSQL HA 命名规约检测报告</h2>
+<h2>🎯 ${MODULE_NAME} 命名规约检测报告</h2>
 EOF
 
 # ------------------------------
@@ -113,4 +120,10 @@ cat >> "$HTML_FILE" <<EOF
 </html>
 EOF
 
-echo "✅ PostgreSQL HTML 报告生成完成: $HTML_FILE" >&2
+# ------------------------------
+# 更新最新报告快捷链接
+# ------------------------------
+ln -sf "$(basename "$HTML_FILE")" "$LATEST_FILE"
+
+echo "✅ PostgreSQL HTML 报告生成完成: $HTML_FILE"
+echo "🔗 最新报告快捷链接: $LATEST_FILE"
