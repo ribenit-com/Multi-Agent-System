@@ -1,10 +1,12 @@
 #!/bin/bash
 # ===================================================
-# HTML 报告生成脚本（PostgreSQL HA） - 修正版
+# HTML 报告生成脚本（PostgreSQL HA） - 修正版 2026-02-19 v1.1
 # 功能：接收 JSON（文件或 stdin），生成 HTML 报告
 # ===================================================
 
 set -e
+
+echo "🔹 check_postgres_names_html.sh v1.1"
 
 # -------------------------------
 # JSON 输入处理
@@ -38,12 +40,12 @@ LATEST_FILE="$REPORT_DIR/latest.html"
 # -------------------------------
 # HTML 头部
 # -------------------------------
-cat > "$HTML_FILE" <<EOF
+cat > "$HTML_FILE" <<'EOF'
 <!DOCTYPE html>
 <html lang="zh">
 <head>
 <meta charset="UTF-8">
-<title>${MODULE_NAME} 命名规约检测报告</title>
+<title>PostgreSQL_HA 命名规约检测报告</title>
 <style>
 body {margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f5f7fa}
 .container {display:flex;justify-content:center;align-items:flex-start;padding:30px}
@@ -58,7 +60,7 @@ h3 {color:#444;margin-top:25px;margin-bottom:10px;border-bottom:1px solid #eee;p
 <body>
 <div class="container">
 <div class="card">
-<h2>🎯 ${MODULE_NAME} 命名规约检测报告</h2>
+<h2>🎯 PostgreSQL_HA 命名规约检测报告</h2>
 EOF
 
 # -------------------------------
