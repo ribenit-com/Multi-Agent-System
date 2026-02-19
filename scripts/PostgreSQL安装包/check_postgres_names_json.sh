@@ -1,11 +1,16 @@
 #!/bin/bash
 # ===================================================
-# JSON 检测脚本（PostgreSQL HA） - 优化版
-# 输出标准化 JSON
+# check_postgres_names_json.sh v1.1 独立执行版
+# 功能：
+#   - 检测 PostgreSQL HA 相关资源
+#   - 输出标准化 JSON
 # ===================================================
 
 set -e
 
+# -------------------------------
+# 配置
+# -------------------------------
 NAMESPACE_STANDARD="ns-postgres-ha"
 STATEFULSET_STANDARD="sts-postgres-ha"
 SERVICE_PRIMARY_STANDARD="svc-postgres-primary"
@@ -14,7 +19,10 @@ PVC_PATTERN="pvc-postgres-ha-"
 APP_LABEL="postgres-ha"
 APP_NAME="PostgreSQL"
 
-EXIST_NAMESPACE=$(kubectl get ns | awk '{print $1}' | grep "^$NAMESPACE_STANDARD$" || echo "")
+# -------------------------------
+# 获取资源信息
+# -------------------------------
+EXIST_NAMESPACE=$(kubectl get ns 2>/dev/null | awk '{print $1}' | grep "^$NAMESPACE_STANDARD$" || echo "")
 STS_LIST=$(kubectl -n "$NAMESPACE_STANDARD" get sts -l app="$APP_LABEL" -o name 2>/dev/null || echo "")
 SERVICE_LIST=$(kubectl -n "$NAMESPACE_STANDARD" get svc -l app="$APP_LABEL" -o name 2>/dev/null || echo "")
 PVC_LIST=$(kubectl -n "$NAMESPACE_STANDARD" get pvc -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || echo "")
@@ -60,7 +68,7 @@ if [[ -z "$PVC_LIST" ]]; then
     json_entries+=("{\"resource_type\":\"PVC\",\"name\":\"${PVC_PATTERN}*\",\"status\":\"不存在\",\"app\":\"$APP_NAME\"}")
 else
     for pvc in $PVC_LIST; do
-        if [[ "$pvc" != "${PVC_PATTERN}"* ]]; then
+        if [[ "$pvc" != ${PVC_PATTERN}* ]]; then
             json_entries+=("{\"resource_type\":\"PVC\",\"name\":\"$pvc\",\"status\":\"命名不规范\",\"app\":\"$APP_NAME\"}")
         fi
     done
@@ -82,10 +90,18 @@ else
 fi
 
 # -------------------------------
-# 输出 JSON
+# 输出标准化 JSON
 # -------------------------------
 if [ ${#json_entries[@]} -eq 0 ]; then
     echo "[]"
 else
-    printf "[\n%s\n]\n" "$(IFS=,; echo "${json_entries[*]}")"
+    echo "["
+    for i in "${!json_entries[@]}"; do
+        if [[ $i -lt $((${#json_entries[@]} - 1)) ]]; then
+            echo "  ${json_entries[$i]},"
+        else
+            echo "  ${json_entries[$i]}"
+        fi
+    done
+    echo "]"
 fi
