@@ -1,0 +1,18 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: n8n
+  namespace: argocd
+spec:
+  destination:
+    namespace: automation
+    server: https://kubernetes.default.svc
+  source:
+    repoURL: https://github.com/YOUR_REPO/n8n-gitops
+    targetRevision: main
+    path: .
+  project: default
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
