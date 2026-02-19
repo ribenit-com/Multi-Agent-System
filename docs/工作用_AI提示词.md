@@ -15,3 +15,14 @@ https://github.com/ribenit-com/Multi-Agent-System/blob/main/Helm/setup_Redis_loc
 1. 创建名称为“PostgreSQL安装报告书-命名规约检测报告书.html”字样的报告书。
 2. 放在“PostgreSQL安装报告书“文件夹下。
 ```
+# 服务器出问题的时候的提示模板
+```
+我正在安装边缘机器人控制中心，PostgreSQL 模块报错。
+[环境快照] 节点: Robot-001, OS: Ubuntu 22.04, K8s: v1.28
+[检测报告摘要]
+- Namespace: OK
+- StatefulSet: Error (Desired: 3, Ready: 1)
+- PVC: OK
+- Pod Logs: "FATAL: could not access file 'recovery.conf': Permission denied"
+请根据以上信息分析病根，并给出三步以内的修复方案。
+```
