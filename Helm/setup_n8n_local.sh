@@ -7,7 +7,6 @@ set -Eeuo pipefail
 NAMESPACE="automation"
 APP_NAME="n8n-ha"
 IMAGE="n8nio/n8n:2.8.2"
-TAR_FILE="n8n_2.8.2.tar"
 GITOPS_DIR="./n8n-gitops"
 
 # 数据库信息
@@ -20,10 +19,13 @@ DB_NAME="mydb"
 LOG_DIR="/mnt/truenas"
 HTML_FILE="$LOG_DIR/n8n-ha-delivery.html"
 
+############################################
+# 错误捕获
+############################################
 trap 'echo; echo "[FATAL] 第 $LINENO 行执行失败"; exit 1' ERR
 
 echo "================================================="
-echo "🚀 n8n HA 完整本地部署自容脚本 v4.0"
+echo "🚀 n8n HA 本地自容部署 v4.1 (镜像本地 + YAML生成 + ArgoCD + 健康检查 + HTML报告)"
 echo "================================================="
 
 ############################################
@@ -33,7 +35,7 @@ echo "[CHECK] Kubernetes API"
 kubectl version --client >/dev/null 2>&1 || kubectl version >/dev/null 2>&1 || true
 
 ############################################
-# 1️⃣ containerd 镜像检查（本地存在即可，显示导入进度）
+# 1️⃣ containerd 镜像检查（只要存在即可，不依赖 tar）
 ############################################
 echo "[CHECK] containerd 镜像"
 IMAGE_NAME_ONLY="${IMAGE##*/}"   # n8n:2.8.2
@@ -41,17 +43,7 @@ IMAGE_NAME_ONLY="${IMAGE##*/}"   # n8n:2.8.2
 if sudo ctr -n k8s.io images list 2>/dev/null | grep -q "$IMAGE_NAME_ONLY"; then
     echo "[OK] 镜像已存在: $IMAGE_NAME_ONLY"
 else
-    if [ -f "$TAR_FILE" ]; then
-        echo "[INFO] 本地 tar 存在，导入镜像到 containerd..."
-        if command -v pv >/dev/null 2>&1; then
-            sudo pv "$TAR_FILE" | sudo ctr -n k8s.io images import -
-        else
-            sudo ctr -n k8s.io images import "$TAR_FILE"
-        fi
-        echo "[OK] 镜像导入完成"
-    else
-        echo "[WARN] 本地 tar 不存在，请手动准备 $TAR_FILE"
-    fi
+    echo "[WARN] 本地镜像 $IMAGE_NAME_ONLY 不存在，请确保已导入 containerd"
 fi
 
 ############################################
@@ -169,16 +161,6 @@ spec:
           volumeMounts:
             - name: data
               mountPath: /home/node/.n8n
-      affinity:
-        podAntiAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-            - labelSelector:
-                matchExpressions:
-                  - key: app
-                    operator: In
-                    values:
-                      - n8n
-              topologyKey: kubernetes.io/hostname
   volumeClaimTemplates:
     - metadata:
         name: data
@@ -220,8 +202,8 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: "" # 本地部署，无需填写
-    targetRevision: main
+    repoURL: ""
+    targetRevision: ""
     path: $GITOPS_DIR
   destination:
     server: https://kubernetes.default.svc
@@ -235,14 +217,14 @@ EOF
 echo "[OK] YAML 文件生成完成"
 
 ############################################
-# 3️⃣ 本地 kubectl apply
+# 3️⃣ 应用 YAML
 ############################################
 echo "[INSTALL] 应用 YAML 到 Kubernetes"
 kubectl apply -f "$GITOPS_DIR/" || true
 echo "[OK] GitOps YAML 已应用"
 
 ############################################
-# 4️⃣ ArgoCD Application 创建/更新
+# 4️⃣ 创建/更新 ArgoCD Application
 ############################################
 echo "[ARGOCD] 创建/更新 Application"
 kubectl apply -f "$GITOPS_DIR/argocd-application.yaml" || true
@@ -275,7 +257,7 @@ while true; do
 done
 
 ############################################
-# 6️⃣ 服务端口 & 数据库检查
+# 6️⃣ 服务端口可访问检查
 ############################################
 SERVICE_IP=$(kubectl get svc -n "$NAMESPACE" n8n -o jsonpath='{.spec.clusterIP}')
 SERVICE_PORT=$(kubectl get svc -n "$NAMESPACE" n8n -o jsonpath='{.spec.ports[0].port}')
@@ -289,15 +271,20 @@ else
     SERVICE_STATUS="FAILED"
 fi
 
+############################################
+# 7️⃣ 数据库连通性检查
+############################################
+DB_HOST="$DB_SERVICE.$DB_NAMESPACE.svc.cluster.local"
 echo "[CHECK] 数据库连通性..."
 kubectl run db-test --rm -i --restart=Never \
   --image=postgres:15 -n "$NAMESPACE" \
   --env PGPASSWORD="$DB_PASS" \
-  --command -- psql -h "$DB_SERVICE.$DB_NAMESPACE.svc.cluster.local" -U "$DB_USER" -d "$DB_NAME" -c '\q' >/dev/null 2>&1 && DB_STATUS="OK" || DB_STATUS="FAILED"
+  --command -- psql -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME" -c '\q' >/dev/null 2>&1 && DB_STATUS="OK" || DB_STATUS="FAILED"
+
 echo "[INFO] 数据库状态: $DB_STATUS"
 
 ############################################
-# 7️⃣ HTML 报告生成
+# 8️⃣ HTML 报告生成
 ############################################
 mkdir -p "$LOG_DIR"
 
@@ -316,7 +303,7 @@ h2{color:#1677ff;text-align:center}
 </style>
 </head>
 <body>
-<h2>🚀 n8n HA 本地部署报告</h2>
+<h2>🚀 n8n HA 本地部署报告 v4.1</h2>
 
 <h3>部署信息</h3>
 <p>Namespace: $NAMESPACE</p>
@@ -340,4 +327,4 @@ echo
 echo "📄 企业交付报告生成完成:"
 echo "👉 $HTML_FILE"
 echo
-echo "🎉 n8n 本地自容部署完成"
+echo "🎉 n8n HA 本地自容部署完成"
