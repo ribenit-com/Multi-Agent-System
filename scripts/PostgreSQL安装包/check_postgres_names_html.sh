@@ -2,22 +2,25 @@
 # ===================================================
 # 脚本名称: check_postgres_names_html.sh
 # 功能: 根据 JSON 数据生成 PostgreSQL HA 命名规约 HTML 报告
-#       - 接收 JSON 文件路径作为参数
+#       - 支持标准输入或 JSON 文件路径
+#       - 实时在终端输出关键状态
 # ===================================================
 
 set -e
 
-JSON_FILE="$1"
-
-if [ -z "$JSON_FILE" ] || [ ! -f "$JSON_FILE" ]; then
-    echo "❌ 请提供有效的 JSON 文件路径"
-    exit 1
-fi
+JSON_INPUT="$1"
 
 # ------------------------------
 # 读取 JSON 数据
 # ------------------------------
-JSON_DATA=$(cat "$JSON_FILE")
+if [ -z "$JSON_INPUT" ] || [ "$JSON_INPUT" = "/dev/stdin" ]; then
+    JSON_DATA=$(cat)
+elif [ -f "$JSON_INPUT" ]; then
+    JSON_DATA=$(cat "$JSON_INPUT")
+else
+    echo "❌ 无效 JSON 输入: $JSON_INPUT"
+    exit 1
+fi
 
 # ------------------------------
 # 报告目录
@@ -55,18 +58,17 @@ pre {background:#f0f2f5;padding:12px;border-radius:6px;overflow-x:auto;font-fami
 EOF
 
 # ------------------------------
-# 根据 JSON 生成 HTML
+# 根据 JSON 生成 HTML 并实时输出终端
 # ------------------------------
 RESOURCE_TYPES=("Namespace" "StatefulSet" "Service" "PVC" "Pod")
 
 for TYPE in "${RESOURCE_TYPES[@]}"; do
-    cat >> "$HTML_FILE" <<EOF
-<h3>$TYPE</h3>
-EOF
-
+    echo "<h3>$TYPE</h3>" >> "$HTML_FILE"
     ITEMS=$(echo "$JSON_DATA" | jq -c ".[] | select(.resource_type==\"$TYPE\")")
+
     if [ -z "$ITEMS" ]; then
         echo "<div class='status-ok'>✅ 所有 $TYPE 正常</div>" >> "$HTML_FILE"
+        echo -e "\033[32m✅ 所有 $TYPE 正常\033[0m"
     else
         echo "$ITEMS" | while read -r item; do
             NAME=$(echo "$item" | jq -r '.name')
@@ -75,21 +77,26 @@ EOF
                 "不存在")
                     CLASS="status-missing"
                     ICON="❌"
+                    COLOR="\033[31m"
                     ;;
                 "命名不规范"|"Pending")
                     CLASS="status-warning"
                     ICON="⚠️"
+                    COLOR="\033[33m"
                     ;;
                 "Running")
                     CLASS="status-ok"
                     ICON="✅"
+                    COLOR="\033[32m"
                     ;;
                 *)
                     CLASS="status-warning"
                     ICON="⚠️"
+                    COLOR="\033[33m"
                     ;;
             esac
             echo "<div class='$CLASS'>$ICON $NAME : $STATUS</div>" >> "$HTML_FILE"
+            echo -e "${COLOR}$ICON $NAME : $STATUS\033[0m"
         done
     fi
 done
