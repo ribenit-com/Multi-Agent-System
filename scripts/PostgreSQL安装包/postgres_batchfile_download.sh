@@ -24,6 +24,9 @@ curl -fsSL "https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/mai
 echo "⬇️ 下载 HTML 报告脚本"
 curl -fsSL "https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/PostgreSQL%E5%AE%89%E8%A3%85%E5%8C%85/check_postgres_names_html.sh" -o check_postgres_names_html.sh
 
+echo "⬇️ 下载 YAML 生成脚本"
+curl -fsSL "https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/PostgreSQL%E5%AE%89%E8%A3%85%E5%8C%85/create_postgres_yaml.sh" -o create_postgres_yaml.sh
+
 # 赋可执行权限
 chmod +x *.sh
 
