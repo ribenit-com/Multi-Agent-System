@@ -2,8 +2,13 @@
 set -Eeuo pipefail
 
 # ===================================================
-# n8n HA 企业级工业部署脚本 v4（自诊断增强）
+# n8n HA 企业级部署脚本 v5
+# 自诊断 + 自动更新 + 离线支持 + HTML交付
 # ===================================================
+
+SCRIPT_VERSION="5.0.0"
+SCRIPT_NAME="setup_n8n_local.sh"
+SCRIPT_REPO="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/Helm"
 
 CHART_DIR="$HOME/gitops/n8n-ha-chart"
 NAMESPACE="automation"
@@ -16,8 +21,43 @@ TAR_FILE="$CHART_DIR/n8n_2.8.2.tar"
 
 mkdir -p "$CHART_DIR/templates" "$LOG_DIR"
 
+# ===================================================
+# 自动版本检测
+# ===================================================
+
+check_for_update() {
+  echo "[CHECK] 检查脚本更新..."
+
+  REMOTE_VERSION=$(curl -fsSL "${SCRIPT_REPO}/${SCRIPT_NAME}" 2>/dev/null | \
+    grep 'SCRIPT_VERSION=' | head -n1 | cut -d'"' -f2)
+
+  if [ -z "$REMOTE_VERSION" ]; then
+    echo "⚠ 无法检测远程版本（可能离线环境）"
+    return
+  fi
+
+  if [ "$REMOTE_VERSION" != "$SCRIPT_VERSION" ]; then
+    echo "⚠ 发现新版本: $REMOTE_VERSION (当前: $SCRIPT_VERSION)"
+    echo "🔄 自动升级脚本..."
+
+    curl -fsSL "${SCRIPT_REPO}/${SCRIPT_NAME}" -o "$SCRIPT_NAME" || {
+      echo "❌ 升级失败"
+      exit 1
+    }
+
+    chmod +x "$SCRIPT_NAME"
+    echo "✅ 升级完成，重新执行..."
+    exec ./"$SCRIPT_NAME"
+    exit 0
+  else
+    echo "✅ 当前已是最新版本 ($SCRIPT_VERSION)"
+  fi
+}
+
+check_for_update
+
 echo "========================================="
-echo "🚀 n8n HA 企业级部署启动 (v4 自诊断版)"
+echo "🚀 n8n HA 企业级部署启动 (v$SCRIPT_VERSION)"
 echo "========================================="
 
 # ===================================================
@@ -26,7 +66,7 @@ echo "========================================="
 
 echo "[CHECK] Kubernetes API"
 kubectl cluster-info >/dev/null 2>&1 || {
-  echo "❌ 无法连接 Kubernetes API"
+  echo "❌ Kubernetes API 不可达"
   exit 1
 }
 
@@ -40,26 +80,17 @@ else
   echo "✅ 所有节点 Ready"
 fi
 
-echo "[CHECK] containerd 服务"
-if ! systemctl is-active --quiet containerd; then
+echo "[CHECK] containerd"
+systemctl is-active --quiet containerd || {
   echo "❌ containerd 未运行"
   exit 1
-else
-  echo "✅ containerd 正常"
-fi
+}
 
 echo "[CHECK] Helm"
 helm version >/dev/null 2>&1 || {
   echo "❌ Helm 未安装"
   exit 1
 }
-
-echo "[CHECK] CoreDNS"
-if ! kubectl -n kube-system get pods -l k8s-app=kube-dns | grep -q Running; then
-  echo "⚠ CoreDNS 未完全 Running（可能不影响本地部署）"
-else
-  echo "✅ CoreDNS 正常"
-fi
 
 # ===================================================
 # 清理旧资源
@@ -70,7 +101,7 @@ kubectl delete pvc -n $NAMESPACE -l app=$APP_LABEL --ignore-not-found --wait=fal
 kubectl get pv -o name | grep n8n-pv- | xargs -r kubectl delete --ignore-not-found --wait=false || true
 
 # ===================================================
-# 镜像导入（离线支持）
+# 镜像检查 / 离线导入
 # ===================================================
 
 echo "[INFO] 检查 containerd 镜像"
@@ -104,13 +135,13 @@ fi
 SC_NAME=$(kubectl get storageclass -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
 
 if [ -z "$SC_NAME" ]; then
-  echo "⚠ 无 StorageClass，将使用手动 PV"
+  echo "⚠ 未检测到 StorageClass"
 else
   echo "✅ StorageClass: $SC_NAME"
 fi
 
 # ===================================================
-# 创建 Helm Chart
+# 生成 Helm Chart
 # ===================================================
 
 echo "[INFO] 生成 Helm Chart"
@@ -187,7 +218,7 @@ spec:
 EOF
 
 # ===================================================
-# 安装
+# 安装 / 升级
 # ===================================================
 
 kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
@@ -199,7 +230,7 @@ else
 fi
 
 # ===================================================
-# 等待就绪
+# 等待 StatefulSet
 # ===================================================
 
 echo "[INFO] 等待 StatefulSet 就绪"
@@ -215,7 +246,7 @@ for i in {1..60}; do
 done
 
 # ===================================================
-# 生成 HTML
+# 生成 HTML 交付页面
 # ===================================================
 
 SERVICE_IP=$(kubectl -n $NAMESPACE get svc n8n -o jsonpath='{.spec.clusterIP}')
@@ -223,17 +254,19 @@ REPLICA_COUNT=$(kubectl -n $NAMESPACE get sts n8n -o jsonpath='{.spec.replicas}'
 
 cat > "$HTML_FILE" <<EOF
 <html>
+<head><title>n8n HA 部署报告</title></head>
 <body>
-<h2>n8n HA 部署成功</h2>
-<p>Namespace: $NAMESPACE</p>
-<p>ClusterIP: $SERVICE_IP</p>
-<p>Replicas: $REPLICA_COUNT</p>
+<h2>🎉 n8n HA 部署成功</h2>
+<p><b>Namespace:</b> $NAMESPACE</p>
+<p><b>ClusterIP:</b> $SERVICE_IP</p>
+<p><b>Replicas:</b> $REPLICA_COUNT</p>
+<pre>kubectl -n $NAMESPACE port-forward svc/n8n 5678:5678</pre>
 </body>
 </html>
 EOF
 
 echo ""
 echo "========================================="
-echo "🎉 n8n HA 企业部署完成"
+echo "🎉 n8n HA 企业部署完成 (v$SCRIPT_VERSION)"
 echo "HTML 页面: $HTML_FILE"
 echo "========================================="
