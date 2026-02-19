@@ -26,7 +26,7 @@ HTML_FILE="$LOG_DIR/n8n-ha-delivery.html"
 trap 'echo; echo "[FATAL] 第 $LINENO 行执行失败"; exit 1' ERR
 
 echo "================================================="
-echo "🚀 n8n HA 企业级 GitOps 自愈部署 v12.2 (Image Auto-Fix, DB Verified)"
+echo "🚀 n8n HA 企业级 GitOps 自愈部署 v12.3 (Image Auto-Fix + DB Verified)"
 echo "================================================="
 
 ############################################
@@ -36,13 +36,15 @@ echo "[CHECK] Kubernetes API"
 kubectl version --client >/dev/null 2>&1 || kubectl version >/dev/null 2>&1 || true
 
 ############################################
-# 1️⃣ containerd 镜像检查（方法 C：直接导入本地 tar）
+# 1️⃣ containerd 镜像检查（自动导入或拉取）
 ############################################
 echo "[CHECK] containerd 镜像"
 
-if ! sudo ctr -n k8s.io images list 2>/dev/null | grep -q "$IMAGE"; then
+IMAGE_NAME_ONLY="${IMAGE##*/}"  # 去掉 registry 前缀，只匹配镜像名
+
+if ! sudo ctr -n k8s.io images list 2>/dev/null | grep -q "$IMAGE_NAME_ONLY"; then
     if [ -f "$TAR_FILE" ]; then
-        echo "[INFO] 镜像存在，直接导入到 k8s.io..."
+        echo "[INFO] 镜像 tar 存在，直接导入到 k8s.io..."
         if command -v pv >/dev/null 2>&1; then
             pv "$TAR_FILE" | sudo ctr -n k8s.io images import - || true
         else
@@ -50,10 +52,16 @@ if ! sudo ctr -n k8s.io images list 2>/dev/null | grep -q "$IMAGE"; then
         fi
         echo "[OK] 镜像导入完成"
     else
-        echo "[WARN] 未找到镜像 tar，跳过导入"
+        echo "[INFO] 本地 tar 不存在，尝试直接 pull 镜像 $IMAGE ..."
+        if sudo ctr -n k8s.io images pull "$IMAGE"; then
+            echo "[OK] 镜像拉取成功"
+        else
+            echo "[ERROR] 镜像拉取失败，请检查网络或镜像名称"
+            exit 1
+        fi
     fi
 else
-    echo "[OK] 镜像已存在"
+    echo "[OK] 镜像已存在: $IMAGE_NAME_ONLY"
 fi
 
 ############################################
@@ -193,7 +201,7 @@ pre{background:#f1f3f5;padding:14px;border-radius:8px}
 <body>
 <div class="container">
 <div class="card">
-<h2>🚀 n8n HA 企业级交付报告 v12.2</h2>
+<h2>🚀 n8n HA 企业级交付报告 v12.3</h2>
 
 <h3>部署信息</h3>
 <p>Namespace: $NAMESPACE</p>
@@ -243,4 +251,4 @@ echo
 echo "📄 企业交付报告生成完成:"
 echo "👉 $HTML_FILE"
 echo
-echo "🎉 v12.2 Image Auto-Fix + DB Verified 执行完成"
+echo "🎉 v12.3 Image Auto-Fix + DB Verified 执行完成"
