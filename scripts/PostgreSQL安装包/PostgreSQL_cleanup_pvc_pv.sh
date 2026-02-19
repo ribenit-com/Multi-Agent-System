@@ -1,22 +1,85 @@
 #!/bin/bash
 # ===================================================
 # 脚本名称: generate_postgresql_report_dir.sh
-# 功能: 生成 PostgreSQL HA 企业交付报告
+# 功能: 生成 PostgreSQL HA 企业交付报告（命名规范检测）
 #       - 输出到 /mnt/truenas/PostgreSQL安装报告书/
 #       - 文件名: PostgreSQL安装报告书-命名规约检测报告书.html
+#       - 支持自动创建 Namespace、Secret、ConfigMap、StatefulSet、Service
 # ===================================================
 
+set -e
+
 # ------------------------------
-# 配置
+# 配置（企业级标准化命名）
 # ------------------------------
-NAMESPACE=${NAMESPACE:-ns-mid-storage}
-APP_LABEL=${APP_LABEL:-postgres}
+NAMESPACE=${NAMESPACE:-ns-postgres-ha}
+APP_LABEL=${APP_LABEL:-postgres-ha}
 BASE_DIR="/mnt/truenas"
 REPORT_DIR="$BASE_DIR/PostgreSQL安装报告书"
 HTML_FILE="$REPORT_DIR/PostgreSQL安装报告书-命名规约检测报告书.html"
 
+STATEFULSET_NAME="sts-postgres-ha"
+SERVICE_PRIMARY="svc-postgres-primary"
+SERVICE_REPLICA="svc-postgres-replica"
+SECRET_NAME="secret-postgres-password"
+CONFIGMAP_NAME="cm-postgres-config"
+
+# ------------------------------
 # 创建报告目录
+# ------------------------------
 mkdir -p "$REPORT_DIR"
+
+# ------------------------------
+# 检查并创建 Namespace
+# ------------------------------
+if ! kubectl get ns "$NAMESPACE" &>/dev/null; then
+    echo "📦 Namespace $NAMESPACE 不存在，正在创建..."
+    kubectl create ns "$NAMESPACE"
+else
+    echo "📌 Namespace $NAMESPACE 已存在"
+fi
+
+# ------------------------------
+# 检查并创建 Secret
+# ------------------------------
+if ! kubectl -n "$NAMESPACE" get secret "$SECRET_NAME" &>/dev/null; then
+    echo "🔑 Secret $SECRET_NAME 不存在，正在创建..."
+    kubectl -n "$NAMESPACE" create secret generic "$SECRET_NAME" \
+        --from-literal=postgres-password="ChangeMe123"
+else
+    echo "📌 Secret $SECRET_NAME 已存在"
+fi
+
+# ------------------------------
+# 检查并创建 ConfigMap（可选）
+# ------------------------------
+if ! kubectl -n "$NAMESPACE" get configmap "$CONFIGMAP_NAME" &>/dev/null; then
+    echo "🗂️ ConfigMap $CONFIGMAP_NAME 不存在，正在创建..."
+    kubectl -n "$NAMESPACE" create configmap "$CONFIGMAP_NAME" \
+        --from-literal=postgresql.conf="shared_buffers = 128MB"
+else
+    echo "📌 ConfigMap $CONFIGMAP_NAME 已存在"
+fi
+
+# ------------------------------
+# 检查并创建 StatefulSet
+# ------------------------------
+if ! kubectl -n "$NAMESPACE" get sts "$STATEFULSET_NAME" &>/dev/null; then
+    echo "⚡ StatefulSet $STATEFULSET_NAME 不存在，建议使用 Helm 或 YAML 部署"
+else
+    echo "📌 StatefulSet $STATEFULSET_NAME 已存在"
+fi
+
+# ------------------------------
+# 检查并创建 Service（主/从）
+# ------------------------------
+for svc in "$SERVICE_PRIMARY" "$SERVICE_REPLICA"; do
+    if ! kubectl -n "$NAMESPACE" get svc "$svc" &>/dev/null; then
+        echo "🌐 Service $svc 不存在，请手动创建或通过 YAML 部署"
+    else
+        echo "📌 Service $svc 已存在"
+    fi
+done
 
 # ------------------------------
 # 获取 PostgreSQL 资源信息
@@ -26,12 +89,12 @@ SERVICE_LIST=$(kubectl -n $NAMESPACE get svc -l app=$APP_LABEL -o name || echo "
 PVC_LIST=$(kubectl -n $NAMESPACE get pvc -l app=$APP_LABEL -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
 POD_STATUS=$(kubectl -n $NAMESPACE get pods -l app=$APP_LABEL -o custom-columns=NAME:.metadata.name,STATUS:.status.phase --no-headers || true)
 
-PRIMARY_SVC=$(echo "$SERVICE_LIST" | head -n1 | awk -F'/' '{print $2}')
+PRIMARY_SVC=$(echo "$SERVICE_LIST" | grep "$SERVICE_PRIMARY" | head -n1 | awk -F'/' '{print $2}' || echo "$SERVICE_PRIMARY")
 SERVICE_IP=$(kubectl -n $NAMESPACE get svc $PRIMARY_SVC -o jsonpath='{.spec.clusterIP}' || echo "127.0.0.1")
 REPLICA_COUNT=$(kubectl -n $NAMESPACE get sts -l app=$APP_LABEL -o jsonpath='{.items[0].spec.replicas}' || echo "2")
 
 # ------------------------------
-# 生成 HTML
+# 生成 HTML 报告
 # ------------------------------
 cat > "$HTML_FILE" <<EOF
 <!DOCTYPE html>
