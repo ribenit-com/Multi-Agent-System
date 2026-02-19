@@ -5,8 +5,9 @@ set -Eeuo pipefail
 # 基础变量
 ############################################
 NAMESPACE="automation"
-APP_NAME="n8n-ha"
-IMAGE="n8nio/n8n:2.8.2"
+APP_NAME="n8n"
+IMAGE="docker.io/n8nio/n8n:2.8.2"
+TAR_FILE="n8n_2.8.2.tar"
 GITOPS_DIR="./n8n-gitops"
 
 # 数据库信息
@@ -25,7 +26,7 @@ HTML_FILE="$LOG_DIR/n8n-ha-delivery.html"
 trap 'echo; echo "[FATAL] 第 $LINENO 行执行失败"; exit 1' ERR
 
 echo "================================================="
-echo "🚀 n8n HA 本地自容部署 v4.1 (镜像本地 + YAML生成 + ArgoCD + 健康检查 + HTML报告)"
+echo "🚀 n8n HA 本地自容部署 v4.2 (镜像自动导入 + YAML生成 + ArgoCD + 健康检查 + HTML报告)"
 echo "================================================="
 
 ############################################
@@ -35,19 +36,36 @@ echo "[CHECK] Kubernetes API"
 kubectl version --client >/dev/null 2>&1 || kubectl version >/dev/null 2>&1 || true
 
 ############################################
-# 1️⃣ containerd 镜像检查（只要存在即可，不依赖 tar）
+# 1️⃣ containerd 镜像检查 & 自动导入
 ############################################
 echo "[CHECK] containerd 镜像"
-IMAGE_NAME_ONLY="${IMAGE##*/}"   # n8n:2.8.2
 
+# 检查镜像是否存在
+IMAGE_NAME_ONLY="${IMAGE##*/}" # n8n:2.8.2
 if sudo ctr -n k8s.io images list 2>/dev/null | grep -q "$IMAGE_NAME_ONLY"; then
     echo "[OK] 镜像已存在: $IMAGE_NAME_ONLY"
 else
-    echo "[WARN] 本地镜像 $IMAGE_NAME_ONLY 不存在，请确保已导入 containerd"
+    if [ -f "$TAR_FILE" ]; then
+        echo "[INFO] 本地 tar 存在，开始导入镜像..."
+        if command -v pv >/dev/null 2>&1; then
+            pv "$TAR_FILE" | sudo ctr -n k8s.io images import -
+        else
+            sudo ctr -n k8s.io images import "$TAR_FILE"
+        fi
+        echo "[OK] 镜像导入完成: $IMAGE"
+    else
+        echo "[FATAL] 本地镜像不存在，且 tar 文件 $TAR_FILE 不存在，请准备镜像后重试"
+        exit 1
+    fi
 fi
 
 ############################################
-# 2️⃣ 生成 GitOps YAML
+# 2️⃣ Namespace 创建
+############################################
+kubectl get ns "$NAMESPACE" >/dev/null 2>&1 || kubectl create ns "$NAMESPACE" >/dev/null 2>&1 || true
+
+############################################
+# 3️⃣ 生成 GitOps YAML 文件
 ############################################
 echo "[GENERATE] 生成 GitOps YAML 文件: $GITOPS_DIR"
 mkdir -p "$GITOPS_DIR"
@@ -140,24 +158,6 @@ spec:
                   key: password
             - name: EXECUTIONS_MODE
               value: regular
-          resources:
-            requests:
-              cpu: 200m
-              memory: 512Mi
-            limits:
-              memory: 1Gi
-          readinessProbe:
-            httpGet:
-              path: /healthz
-              port: 5678
-            initialDelaySeconds: 20
-            periodSeconds: 10
-          livenessProbe:
-            httpGet:
-              path: /healthz
-              port: 5678
-            initialDelaySeconds: 60
-            periodSeconds: 20
           volumeMounts:
             - name: data
               mountPath: /home/node/.n8n
@@ -197,13 +197,13 @@ cat > "$GITOPS_DIR/argocd-application.yaml" <<EOF
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
-  name: $APP_NAME
+  name: n8n-ha
   namespace: argocd
 spec:
   project: default
   source:
-    repoURL: ""
-    targetRevision: ""
+    repoURL: ""  # 本地部署，可空
+    targetRevision: main
     path: $GITOPS_DIR
   destination:
     server: https://kubernetes.default.svc
@@ -217,21 +217,21 @@ EOF
 echo "[OK] YAML 文件生成完成"
 
 ############################################
-# 3️⃣ 应用 YAML
+# 4️⃣ 应用 YAML 到 Kubernetes
 ############################################
 echo "[INSTALL] 应用 YAML 到 Kubernetes"
 kubectl apply -f "$GITOPS_DIR/" || true
 echo "[OK] GitOps YAML 已应用"
 
 ############################################
-# 4️⃣ 创建/更新 ArgoCD Application
+# 5️⃣ 创建/更新 ArgoCD Application
 ############################################
 echo "[ARGOCD] 创建/更新 Application"
 kubectl apply -f "$GITOPS_DIR/argocd-application.yaml" || true
 echo "[OK] ArgoCD Application 已创建/更新"
 
 ############################################
-# 5️⃣ Pod 就绪检查
+# 6️⃣ 等待 Pod 就绪
 ############################################
 echo "[CHECK] 等待 n8n Pod 就绪..."
 MAX_WAIT=180
@@ -249,7 +249,6 @@ while true; do
 
   sleep $SLEEP_INTERVAL
   ELAPSED=$((ELAPSED + SLEEP_INTERVAL))
-  
   if [[ "$ELAPSED" -ge "$MAX_WAIT" ]]; then
       echo "[WARN] 等待 n8n Pod 就绪超时 ($READY_COUNT/$TOTAL_COUNT)"
       break
@@ -257,31 +256,22 @@ while true; do
 done
 
 ############################################
-# 6️⃣ 服务端口可访问检查
+# 7️⃣ 服务端口可访问 & 数据库连通性检查
 ############################################
 SERVICE_IP=$(kubectl get svc -n "$NAMESPACE" n8n -o jsonpath='{.spec.clusterIP}')
 SERVICE_PORT=$(kubectl get svc -n "$NAMESPACE" n8n -o jsonpath='{.spec.ports[0].port}')
 
-echo "[CHECK] 服务端口访问..."
 if nc -z -w 5 "$SERVICE_IP" "$SERVICE_PORT"; then
-    echo "[OK] n8n 服务端口可访问 ($SERVICE_IP:$SERVICE_PORT)"
     SERVICE_STATUS="OK"
 else
-    echo "[WARN] n8n 服务端口不可访问"
     SERVICE_STATUS="FAILED"
 fi
 
-############################################
-# 7️⃣ 数据库连通性检查
-############################################
 DB_HOST="$DB_SERVICE.$DB_NAMESPACE.svc.cluster.local"
-echo "[CHECK] 数据库连通性..."
 kubectl run db-test --rm -i --restart=Never \
   --image=postgres:15 -n "$NAMESPACE" \
   --env PGPASSWORD="$DB_PASS" \
   --command -- psql -h "$DB_HOST" -U "$DB_USER" -d "$DB_NAME" -c '\q' >/dev/null 2>&1 && DB_STATUS="OK" || DB_STATUS="FAILED"
-
-echo "[INFO] 数据库状态: $DB_STATUS"
 
 ############################################
 # 8️⃣ HTML 报告生成
@@ -303,7 +293,7 @@ h2{color:#1677ff;text-align:center}
 </style>
 </head>
 <body>
-<h2>🚀 n8n HA 本地部署报告 v4.1</h2>
+<h2>🚀 n8n HA 本地部署报告</h2>
 
 <h3>部署信息</h3>
 <p>Namespace: $NAMESPACE</p>
@@ -327,4 +317,4 @@ echo
 echo "📄 企业交付报告生成完成:"
 echo "👉 $HTML_FILE"
 echo
-echo "🎉 n8n HA 本地自容部署完成"
+echo "🎉 n8n 本地自容部署完成"
