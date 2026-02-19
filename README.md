@@ -4,6 +4,29 @@ sudo apt install -y postgresql-client
 需要单独安装的工具组：　
 postgresql-client
 
+
+🛠️ 进阶建议：如何让它对 AI 更友好？
+既然你提到了“直接抛给 AI”，我们可以给这个结构加一个 “AI 诊断接口”。
+
+1. 增加一个 extract_ai_context.sh
+主控脚本在检测到任何 sh 执行失败时，自动调用这个脚本。
+
+它的作用是：从 JSON 报告中提取异常字段，加上 kubectl describe 的最后几行，生成一个极简的 .txt 或 .json。
+
+文件名建议： postgres_ai_debug_snapshot.json
+
+2. 统一日志流向
+建议增加一个 logs/ 文件夹。
+
+主控脚本运行时，将每个原子脚本的 stdout 和 stderr 全部打上时间戳并存入该文件夹。
+
+当出问题时，你只需把 logs/ 下失败的那部分内容贴给 AI，诊断精度会大幅提升。
+
+3. 环境自描述 (README 增强)
+在 .md 文档里加一段 “AI 辅助维护指南”。
+
+示例内容：“如果遇到数据库无法启动，请将 check_postgres_names_json.sh 的输出和 /mnt/truenas 的挂载状态提供给 AI，并提示它：‘我是基于你的边缘机器人控制中心架构运行的’。”
+
 # Moltbot - 餐饮业智能员工调度基盘
 
 ## 🌐 项目背景 (Project Background)
