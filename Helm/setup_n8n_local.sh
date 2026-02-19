@@ -2,8 +2,8 @@
 set -Eeuo pipefail
 
 # ===================================================
-# n8n HA 企业级一键部署 + HTML 交付页面
-# 支持 containerd 节点、Pod 状态可视化
+# n8n HA 企业级工业部署脚本 v3
+# 支持 containerd、多节点导入、状态检测、HTML交付页
 # ===================================================
 
 # ---------- 配置 ----------
@@ -13,63 +13,94 @@ PVC_SIZE="10Gi"
 APP_LABEL="n8n"
 LOG_DIR="/mnt/truenas"
 HTML_FILE="${LOG_DIR}/n8n_ha_info.html"
-N8N_IMAGE="n8nio/n8n:2.8.2"
+N8N_IMAGE="docker.io/n8nio/n8n:2.8.2"
 TAR_FILE="$CHART_DIR/n8n_2.8.2.tar"
 
 mkdir -p "$CHART_DIR/templates" "$LOG_DIR"
 
-# ---------- Step 0: 清理已有 PVC/PV ----------
-echo "[INFO] Step 0: 清理已有 PVC/PV"
+echo "========================================="
+echo "🚀 n8n HA 企业级部署启动"
+echo "========================================="
+
+# ---------- 环境检测 ----------
+echo "[CHECK] Kubernetes API"
+kubectl version --short >/dev/null
+
+echo "[CHECK] containerd"
+sudo ctr version >/dev/null
+
+echo "[CHECK] Helm"
+helm version >/dev/null
+
+# ---------- Step 0: 清理 ----------
+echo "[INFO] 清理旧 PVC/PV"
 kubectl delete pvc -n $NAMESPACE -l app=$APP_LABEL --ignore-not-found --wait=false || true
 kubectl get pv -o name | grep n8n-pv- | xargs -r kubectl delete --ignore-not-found --wait=false || true
 
-# ---------- Step 0.5: 检查 containerd 镜像 ----------
-echo "[INFO] Step 0.5: 检查 containerd 镜像或导入离线 tar"
-if ! sudo ctr -n k8s.io images ls | grep -q "${N8N_IMAGE}"; then
-  if [ -f "$TAR_FILE" ]; then
-    echo "[WARN] containerd 上没有 $N8N_IMAGE 镜像，检测到本地 tar 文件，开始导入..."
-    # 修复 tar 文件权限
-    sudo chown $(whoami):$(whoami) "$TAR_FILE"
-    chmod 644 "$TAR_FILE"
-    echo "[INFO] 导入中，请耐心等待..."
-    sudo ctr -n k8s.io image import "$TAR_FILE" | pv -p -t -e -r > /dev/null
-    echo "[INFO] 镜像导入完成: $N8N_IMAGE"
-  else
-    echo "[ERROR] containerd 上没有 $N8N_IMAGE 镜像，且未检测到本地 tar 文件: $TAR_FILE"
-    echo "请先准备 tar 文件或联网拉取镜像: sudo ctr -n k8s.io image pull $N8N_IMAGE"
-    exit 1
-  fi
-else
-  echo "[INFO] containerd 上已存在镜像: $N8N_IMAGE"
-fi
+# ---------- Step 0.5: 多节点镜像导入 ----------
+echo "[INFO] 检查 containerd 镜像"
 
-# ---------- Step 1: 检测 StorageClass ----------
-echo "[INFO] Step 1: 检测 StorageClass"
+NODE_LIST=$(kubectl get nodes -o jsonpath='{.items[*].metadata.name}')
+
+for NODE in $NODE_LIST; do
+  echo "🔍 检查节点: $NODE"
+
+  if sudo ctr -n k8s.io images list | awk '{print $1}' | grep -q "^${N8N_IMAGE}$"; then
+    echo "   ✅ 镜像已存在"
+  else
+    if [ -f "$TAR_FILE" ]; then
+      echo "   ⚠ 未发现镜像，开始导入..."
+
+      START_TIME=$(date +%s)
+
+      sudo ctr -n k8s.io image import "$TAR_FILE" >/dev/null 2>&1 &
+      PID=$!
+
+      while kill -0 $PID 2>/dev/null; do
+        ELAPSED=$(( $(date +%s) - START_TIME ))
+        printf "\r   ⏳ 导入中... %ds" "$ELAPSED"
+        sleep 2
+      done
+
+      wait $PID
+      echo ""
+      echo "   ✅ 导入完成"
+    else
+      echo "   ❌ 未找到镜像 tar 文件: $TAR_FILE"
+      exit 1
+    fi
+  fi
+done
+
+# ---------- Step 1: StorageClass ----------
+echo "[INFO] 检测 StorageClass"
 SC_NAME=$(kubectl get storageclass -o jsonpath='{.items[0].metadata.name}' || true)
+
 if [ -z "$SC_NAME" ]; then
-  echo "[WARN] 集群没有 StorageClass，将使用手动 PV"
+  echo "⚠ 无 StorageClass，将创建手动 PV"
 else
-  echo "[INFO] 检测到 StorageClass: $SC_NAME"
+  echo "✅ StorageClass: $SC_NAME"
 fi
 
 # ---------- Step 2: 创建 Helm Chart ----------
-echo "[INFO] Step 2: 创建 Helm Chart"
+echo "[INFO] 生成 Helm Chart"
+
 cat > "$CHART_DIR/Chart.yaml" <<EOF
 apiVersion: v2
 name: n8n-ha-chart
-description: "n8n HA Helm Chart"
 type: application
 version: 1.0.0
 appVersion: "2.8.2"
 EOF
 
+echo "*.tar" > "$CHART_DIR/.helmignore"
+
 cat > "$CHART_DIR/values.yaml" <<EOF
 replicaCount: 2
 image:
-  registry: n8nio
-  repository: n8n
+  repository: n8nio/n8n
   tag: "2.8.2"
-  pullPolicy: Never  # 使用本地 containerd 镜像
+  pullPolicy: Never
 
 persistence:
   enabled: true
@@ -85,13 +116,12 @@ resources:
     cpu: 250m
 EOF
 
+# ---------- StatefulSet ----------
 cat > "$CHART_DIR/templates/statefulset.yaml" <<'EOF'
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: n8n
-  labels:
-    app: n8n
 spec:
   serviceName: n8n-headless
   replicas: {{ .Values.replicaCount }}
@@ -105,7 +135,7 @@ spec:
     spec:
       containers:
         - name: n8n
-          image: "{{ .Values.image.registry }}/{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           ports:
             - containerPort: 5678
@@ -124,6 +154,7 @@ spec:
         {{- end }}
 EOF
 
+# ---------- Service ----------
 cat > "$CHART_DIR/templates/service.yaml" <<EOF
 apiVersion: v1
 kind: Service
@@ -134,150 +165,55 @@ spec:
   ports:
     - port: 5678
       targetPort: 5678
-      name: http
   selector:
     app: n8n
 EOF
 
-cat > "$CHART_DIR/templates/headless-service.yaml" <<EOF
-apiVersion: v1
-kind: Service
-metadata:
-  name: n8n-headless
-spec:
-  clusterIP: None
-  ports:
-    - port: 5678
-      targetPort: 5678
-  selector:
-    app: n8n
-EOF
+# ---------- 安装 ----------
+echo "[INFO] Helm 安装/升级"
 
-# ---------- Step 3: 手动 PV (如无 StorageClass) ----------
-if [ -z "$SC_NAME" ]; then
-  echo "[INFO] Step 3: 创建手动 PV"
-  for i in $(seq 0 1); do
-    PV_NAME="n8n-pv-$i"
-    mkdir -p /mnt/data/n8n-$i
-    cat > /tmp/$PV_NAME.yaml <<EOF
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: $PV_NAME
-spec:
-  capacity:
-    storage: $PVC_SIZE
-  accessModes:
-    - ReadWriteOnce
-  hostPath:
-    path: /mnt/data/n8n-$i
-  persistentVolumeReclaimPolicy: Retain
-EOF
-    kubectl apply -f /tmp/$PV_NAME.yaml
-  done
-fi
+kubectl create namespace $NAMESPACE --dry-run=client -o yaml | kubectl apply -f -
 
-# ---------- Step 4: 使用 Helm 安装 n8n HA ----------
-echo "[INFO] Step 4: 使用 Helm 安装/升级 n8n HA"
 if helm status n8n-ha -n $NAMESPACE >/dev/null 2>&1; then
-  echo "[INFO] Release 已存在，升级 Helm Chart..."
   helm upgrade n8n-ha "$CHART_DIR" -n $NAMESPACE
 else
-  echo "[INFO] Release 不存在，安装 Helm Chart..."
-  helm install n8n-ha "$CHART_DIR" -n $NAMESPACE --create-namespace
+  helm install n8n-ha "$CHART_DIR" -n $NAMESPACE
 fi
 
-# ---------- Step 4a: 等待 StatefulSet ----------
-echo "[INFO] 等待 n8n StatefulSet 就绪..."
+# ---------- 等待 ----------
+echo "[INFO] 等待 StatefulSet 就绪"
+
 for i in {1..60}; do
-  if kubectl -n $NAMESPACE get sts n8n >/dev/null 2>&1; then
-    READY=$(kubectl -n $NAMESPACE get sts n8n -o jsonpath='{.status.readyReplicas}' || echo "0")
-    DESIRED=$(kubectl -n $NAMESPACE get sts n8n -o jsonpath='{.spec.replicas}' || echo "2")
-    echo "[INFO][$i] StatefulSet n8n: $READY/$DESIRED 就绪"
-    if [ "$READY" == "$DESIRED" ]; then
-      echo "[INFO] ✅ StatefulSet 已就绪"
-      break
-    fi
-  else
-    echo "[INFO][$i] StatefulSet n8n 尚未创建，等待 5s..."
+  READY=$(kubectl -n $NAMESPACE get sts n8n -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
+  DESIRED=$(kubectl -n $NAMESPACE get sts n8n -o jsonpath='{.spec.replicas}' 2>/dev/null || echo "2")
+  echo "   状态: $READY / $DESIRED"
+  if [ "$READY" == "$DESIRED" ]; then
+    echo "✅ 部署成功"
+    break
   fi
   sleep 5
 done
 
-# ---------- Step 5: 生成企业交付 HTML ----------
-echo "[INFO] Step 5: 生成 HTML 页面"
-SERVICE_IP=$(kubectl -n $NAMESPACE get svc n8n -o jsonpath='{.spec.clusterIP}' || echo "127.0.0.1")
-PVC_LIST=$(kubectl -n $NAMESPACE get pvc -l app=$APP_LABEL -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
-REPLICA_COUNT=$(kubectl -n $NAMESPACE get sts n8n -o jsonpath='{.spec.replicas}' || echo "2")
-POD_STATUS=$(kubectl -n $NAMESPACE get pods -l app=$APP_LABEL -o custom-columns=NAME:.metadata.name,STATUS:.status.phase --no-headers || true)
+# ---------- 生成 HTML ----------
+SERVICE_IP=$(kubectl -n $NAMESPACE get svc n8n -o jsonpath='{.spec.clusterIP}')
+REPLICA_COUNT=$(kubectl -n $NAMESPACE get sts n8n -o jsonpath='{.spec.replicas}')
 
 cat > "$HTML_FILE" <<EOF
-<!DOCTYPE html>
-<html lang="zh">
-<head>
-<meta charset="UTF-8">
-<title>n8n HA 企业交付指南</title>
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>
-body {margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f5f7fa}
-.container {display:flex;justify-content:center;align-items:flex-start;padding:30px}
-.card {background:#fff;padding:30px 40px;border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,.08);width:650px}
-h2 {color:#1677ff;margin-bottom:20px;text-align:center}
-h3 {color:#444;margin-top:25px;margin-bottom:10px;border-bottom:1px solid #eee;padding-bottom:5px}
-pre {background:#f0f2f5;padding:12px;border-radius:6px;overflow-x:auto;font-family:monospace}
-.info {margin-bottom:10px}
-.label {font-weight:600;color:#333}
-.value {color:#555;margin-left:5px}
-.status-running {color:green;font-weight:600}
-.status-pending {color:orange;font-weight:600}
-.status-failed {color:red;font-weight:600}
-.footer {margin-top:20px;font-size:12px;color:#888;text-align:center}
-</style>
-</head>
+<html>
+<head><title>n8n HA</title></head>
 <body>
-<div class="container">
-<div class="card">
-<h2>🎉 n8n HA 安装完成</h2>
-
-<h3>数据库信息</h3>
-<div class="info"><span class="label">Namespace:</span><span class="value">$NAMESPACE</span></div>
-<div class="info"><span class="label">Service:</span><span class="value">n8n</span></div>
-<div class="info"><span class="label">ClusterIP:</span><span class="value">$SERVICE_IP</span></div>
-<div class="info"><span class="label">端口:</span><span class="value">5678</span></div>
-<div class="info"><span class="label">副本数:</span><span class="value">$REPLICA_COUNT</span></div>
-
-<h3>PVC 列表</h3>
-<pre>$PVC_LIST</pre>
-
-<h3>Pod 状态</h3>
-<pre>
-EOF
-
-while read -r line; do
-  POD_NAME=$(echo $line | awk '{print $1}')
-  STATUS=$(echo $line | awk '{print $2}')
-  CASE_CLASS="status-failed"
-  [[ "$STATUS" == "Running" ]] && CASE_CLASS="status-running"
-  [[ "$STATUS" == "Pending" ]] && CASE_CLASS="status-pending"
-  echo "<div class=\"$CASE_CLASS\">$POD_NAME : $STATUS</div>" >> "$HTML_FILE"
-done <<< "$POD_STATUS"
-
-cat >> "$HTML_FILE" <<EOF
-</pre>
-
-<h3>访问方式</h3>
-<pre>
-kubectl -n $NAMESPACE port-forward svc/n8n 5678:5678
-</pre>
-
-<div class="footer">
-生成时间: $(date '+%Y-%m-%d %H:%M:%S')
-</div>
-
-</div>
-</div>
+<h2>n8n HA 部署完成</h2>
+<p>Namespace: $NAMESPACE</p>
+<p>ClusterIP: $SERVICE_IP</p>
+<p>Replicas: $REPLICA_COUNT</p>
+<p>访问方式:</p>
+<pre>kubectl -n $NAMESPACE port-forward svc/n8n 5678:5678</pre>
 </body>
 </html>
 EOF
 
-echo "[INFO] ✅ n8n HA 企业交付 HTML 页面已生成: $HTML_FILE"
+echo ""
+echo "========================================="
+echo "🎉 n8n HA 企业部署完成"
+echo "HTML 页面: $HTML_FILE"
+echo "========================================="
