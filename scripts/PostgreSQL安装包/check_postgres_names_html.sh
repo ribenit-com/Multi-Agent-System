@@ -1,6 +1,6 @@
 #!/bin/bash
 # ===================================================
-# HTML 报告生成脚本（PostgreSQL HA） - 修正版 2026-02-19 v1.1
+# HTML 报告生成脚本（PostgreSQL HA） - 修正版 v1.1
 # 功能：接收 JSON（文件或 stdin），生成 HTML 报告
 # ===================================================
 
@@ -17,10 +17,12 @@ if [ -t 0 ] && [ -z "$1" ]; then
 fi
 
 if [ -t 0 ]; then
+    # 有参数且不是管道
     JSON_INPUT="$1"
     JSON_DATA=$(cat "$JSON_INPUT")
 else
-    JSON_DATA=$(cat)   # 从管道读取
+    # 从管道读取
+    JSON_DATA=$(cat)
 fi
 
 # -------------------------------
