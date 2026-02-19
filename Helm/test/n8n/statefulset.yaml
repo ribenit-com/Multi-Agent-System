@@ -1,0 +1,99 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: n8n
+  namespace: automation
+spec:
+  serviceName: n8n
+  replicas: 2
+  selector:
+    matchLabels:
+      app: n8n
+  template:
+    metadata:
+      labels:
+        app: n8n
+    spec:
+
+      # 🧪 数据库强制等待
+      initContainers:
+        - name: wait-for-postgres
+          image: postgres:15
+          command:
+            - sh
+            - -c
+            - |
+              until pg_isready -h postgres.database.svc.cluster.local -p 5432; do
+                echo "Waiting for Postgres..."
+                sleep 3
+              done
+
+      containers:
+        - name: n8n
+          image: n8nio/n8n:2.8.2
+          ports:
+            - containerPort: 5678
+
+          env:
+            - name: DB_TYPE
+              value: postgresdb
+            - name: DB_POSTGRESDB_HOST
+              value: postgres.database.svc.cluster.local
+            - name: DB_POSTGRESDB_PORT
+              value: "5432"
+            - name: DB_POSTGRESDB_DATABASE
+              value: mydb
+            - name: DB_POSTGRESDB_USER
+              value: myuser
+            - name: DB_POSTGRESDB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: password
+            - name: EXECUTIONS_MODE
+              value: regular
+
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              memory: 1Gi
+
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 5678
+            initialDelaySeconds: 20
+            periodSeconds: 10
+
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 5678
+            initialDelaySeconds: 60
+            periodSeconds: 20
+
+          volumeMounts:
+            - name: data
+              mountPath: /home/node/.n8n
+
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values:
+                      - n8n
+              topologyKey: kubernetes.io/hostname
+
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 10Gi
