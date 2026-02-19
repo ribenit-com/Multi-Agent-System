@@ -1,47 +1,69 @@
 #!/bin/bash
 # ===================================================
-# 脚本名称: generate_postgres_ha_yaml.sh
-# 功能: 根据检测 JSON 生成 PostgreSQL HA GitOps YAML 文件
-#       - 可配置副本数 & StorageClass
-#       - 从 stdin 读取 JSON
-#       - 输出目录直接可用于 ArgoCD/GitOps
+# generate_postgres_ha_yaml.sh v1.1 独立执行版
+# 功能:
+#   - 根据检测 JSON 生成 PostgreSQL HA GitOps YAML
+#   - 支持 Primary + Replica + PVC
+#   - 可配置副本数 & StorageClass
+#   - 支持独立调试（没有 JSON 时自动生成模拟 JSON）
 # ===================================================
 
 set -e
+set -o pipefail
 
 # -----------------------------
 # 参数设置
 # -----------------------------
-REPLICA_COUNT="${1:-3}"                # 副本数，默认3
-STORAGE_CLASS="${2:-}"                 # StorageClass，可为空
-OUTPUT_DIR="${OUTPUT_DIR:-./gitops/postgres-ha}"  # 输出目录
+REPLICA_COUNT="${1:-2}"                 # 副本数，默认2
+STORAGE_CLASS="${2:-}"                  # StorageClass，可为空
+OUTPUT_DIR="${OUTPUT_DIR:-./gitops/postgres-ha}"
 POSTGRES_USER="${POSTGRES_USER:-myuser}"
 POSTGRES_PASSWORD="${POSTGRES_PASSWORD:-mypassword}"
 POSTGRES_DB="${POSTGRES_DB:-mydb}"
 
+mkdir -p "$OUTPUT_DIR"
+
 # -----------------------------
-# 从 stdin 读取 JSON
+# 读取 JSON 或使用模拟 JSON
 # -----------------------------
-INPUT_JSON=$(cat)
+if [ -t 0 ]; then
+  # stdin 没有输入 -> 使用默认模拟 JSON
+  INPUT_JSON='[
+    {"resource_type":"Namespace","name":"ns-postgres-ha","status":"存在","app":"PostgreSQL"},
+    {"resource_type":"StatefulSet","name":"sts-postgres-ha-primary","status":"不存在","app":"PostgreSQL"},
+    {"resource_type":"StatefulSet","name":"sts-postgres-ha-replica","status":"不存在","app":"PostgreSQL"},
+    {"resource_type":"Service","name":"svc-postgres-primary","status":"不存在","app":"PostgreSQL"},
+    {"resource_type":"Service","name":"svc-postgres-replica","status":"不存在","app":"PostgreSQL"},
+    {"resource_type":"PVC","name":"pvc-postgres-ha-primary-0","status":"不存在","app":"PostgreSQL"},
+    {"resource_type":"PVC","name":"pvc-postgres-ha-replica-0","status":"不存在","app":"PostgreSQL"}
+  ]'
+else
+  # 从 stdin 读取 JSON
+  INPUT_JSON=$(cat)
+fi
 
 # -----------------------------
 # 提取资源信息
 # -----------------------------
 NAMESPACE=$(echo "$INPUT_JSON" | jq -r '.[] | select(.resource_type=="Namespace") | .name')
-STATEFULSET=$(echo "$INPUT_JSON" | jq -r '.[] | select(.resource_type=="StatefulSet") | .name')
+STATEFULSETS=($(echo "$INPUT_JSON" | jq -r '.[] | select(.resource_type=="StatefulSet") | .name'))
 SERVICE_PRIMARY=$(echo "$INPUT_JSON" | jq -r '.[] | select(.resource_type=="Service") | select(.name|test("primary")) | .name')
 SERVICE_REPLICA=$(echo "$INPUT_JSON" | jq -r '.[] | select(.resource_type=="Service") | select(.name|test("replica")) | .name')
+PVC_NAMES=($(echo "$INPUT_JSON" | jq -r '.[] | select(.resource_type=="PVC") | .name'))
 
-# PVC 列表
-readarray -t PVC_NAMES <<< "$(echo "$INPUT_JSON" | jq -r '.[] | select(.resource_type=="PVC") | .name')"
+PRIMARY_STS="${STATEFULSETS[0]}"
+REPLICA_STS="${STATEFULSETS[1]}"
+
+echo "🔹 输出目录: $OUTPUT_DIR"
+echo "🔹 Namespace: $NAMESPACE"
+echo "🔹 Primary StatefulSet: $PRIMARY_STS"
+echo "🔹 Replica StatefulSet: $REPLICA_STS"
+echo "🔹 主库 Service: $SERVICE_PRIMARY"
+echo "🔹 副本 Service: $SERVICE_REPLICA"
+echo "🔹 PVC: ${PVC_NAMES[*]}"
 
 # -----------------------------
-# 创建输出目录
-# -----------------------------
-mkdir -p "$OUTPUT_DIR"
-
-# -----------------------------
-# 生成 Namespace YAML
+# Namespace YAML
 # -----------------------------
 cat > "$OUTPUT_DIR/namespace.yaml" <<EOF
 apiVersion: v1
@@ -51,19 +73,28 @@ metadata:
 EOF
 
 # -----------------------------
-# 生成 StatefulSet YAML
+# StatefulSet YAML 模板
 # -----------------------------
-cat > "$OUTPUT_DIR/statefulset.yaml" <<EOF
+for STS in "$PRIMARY_STS" "$REPLICA_STS"; do
+  if [[ "$STS" == "$PRIMARY_STS" ]]; then
+    SERVICE="$SERVICE_PRIMARY"
+    REPLICAS=1
+  else
+    SERVICE="$SERVICE_REPLICA"
+    REPLICAS=$REPLICA_COUNT
+  fi
+
+  cat > "$OUTPUT_DIR/$STS.yaml" <<EOF
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: $STATEFULSET
+  name: $STS
   namespace: $NAMESPACE
   labels:
     app: postgres-ha
 spec:
-  serviceName: $SERVICE_REPLICA
-  replicas: $REPLICA_COUNT
+  serviceName: $SERVICE
+  replicas: $REPLICAS
   selector:
     matchLabels:
       app: postgres-ha
@@ -89,36 +120,47 @@ spec:
           volumeMounts:
 EOF
 
-for pvc in "${PVC_NAMES[@]}"; do
-cat >> "$OUTPUT_DIR/statefulset.yaml" <<EOF
-            - name: $pvc
+  for PVC in "${PVC_NAMES[@]}"; do
+    if [[ "$STS" == *"primary"* && "$PVC" == *"primary"* ]]; then
+      cat >> "$OUTPUT_DIR/$STS.yaml" <<EOF
+            - name: $PVC
               mountPath: /var/lib/postgresql/data
 EOF
-done
+    elif [[ "$STS" == *"replica"* && "$PVC" == *"replica"* ]]; then
+      cat >> "$OUTPUT_DIR/$STS.yaml" <<EOF
+            - name: $PVC
+              mountPath: /var/lib/postgresql/data
+EOF
+    fi
+  done
 
-cat >> "$OUTPUT_DIR/statefulset.yaml" <<EOF
+  cat >> "$OUTPUT_DIR/$STS.yaml" <<EOF
   volumeClaimTemplates:
 EOF
 
-for pvc in "${PVC_NAMES[@]}"; do
-cat >> "$OUTPUT_DIR/statefulset.yaml" <<EOF
+  for PVC in "${PVC_NAMES[@]}"; do
+    if [[ "$STS" == *"primary"* && "$PVC" == *"primary"* ]] || [[ "$STS" == *"replica"* && "$PVC" == *"replica"* ]]; then
+      cat >> "$OUTPUT_DIR/$STS.yaml" <<EOF
     - metadata:
-        name: $pvc
+        name: $PVC
       spec:
         accessModes: ["ReadWriteOnce"]
         resources:
           requests:
             storage: 5Gi
 EOF
-if [ -n "$STORAGE_CLASS" ]; then
-cat >> "$OUTPUT_DIR/statefulset.yaml" <<EOF
+      if [ -n "$STORAGE_CLASS" ]; then
+        cat >> "$OUTPUT_DIR/$STS.yaml" <<EOF
         storageClassName: $STORAGE_CLASS
 EOF
-fi
+      fi
+    fi
+  done
+
 done
 
 # -----------------------------
-# 生成主库 Service YAML
+# Services YAML
 # -----------------------------
 cat > "$OUTPUT_DIR/service-primary.yaml" <<EOF
 apiVersion: v1
@@ -136,9 +178,6 @@ spec:
       name: postgres
 EOF
 
-# -----------------------------
-# 生成副本 Headless Service YAML
-# -----------------------------
 cat > "$OUTPUT_DIR/service-replica.yaml" <<EOF
 apiVersion: v1
 kind: Service
@@ -156,7 +195,7 @@ spec:
 EOF
 
 # -----------------------------
-# 生成手动 PV（如果没有 StorageClass）
+# 手动 PV（如果没有 StorageClass）
 # -----------------------------
 if [ -z "$STORAGE_CLASS" ]; then
   echo "=== 生成手动 PV ==="
