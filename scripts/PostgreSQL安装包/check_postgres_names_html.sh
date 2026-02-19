@@ -1,13 +1,12 @@
 #!/bin/bash
 # ===================================================
-# HTML 报告生成脚本（PostgreSQL HA）
+# HTML 报告生成脚本（PostgreSQL HA） - 优化版
 # 输入：JSON 数据（stdin 或文件）
 # ===================================================
 
 set -e
 
 JSON_INPUT="$1"
-
 [ -z "$JSON_INPUT" ] && JSON_INPUT="/dev/stdin"
 JSON_DATA=$(cat "$JSON_INPUT")
 
@@ -22,7 +21,9 @@ TIMESTAMP=$(date '+%Y%m%d_%H%M%S')
 HTML_FILE="$REPORT_DIR/${MODULE_NAME}_${DESCRIPTION}_$TIMESTAMP.html"
 LATEST_FILE="$REPORT_DIR/latest.html"
 
+# -------------------------------
 # HTML 头部
+# -------------------------------
 cat > "$HTML_FILE" <<EOF
 <!DOCTYPE html>
 <html lang="zh">
@@ -46,14 +47,18 @@ h3 {color:#444;margin-top:25px;margin-bottom:10px;border-bottom:1px solid #eee;p
 <h2>🎯 ${MODULE_NAME} 命名规约检测报告</h2>
 EOF
 
+# -------------------------------
+# 遍历资源类型
+# -------------------------------
 RESOURCE_TYPES=("Namespace" "StatefulSet" "Service" "PVC" "Pod")
+
 for TYPE in "${RESOURCE_TYPES[@]}"; do
     echo "<h3>$TYPE</h3>" >> "$HTML_FILE"
-    ITEMS=$(echo "$JSON_DATA" | jq -c ".[] | select(.resource_type==\"$TYPE\")")
-    if [ -z "$ITEMS" ]; then
+    ITEM_COUNT=$(echo "$JSON_DATA" | jq "[.[] | select(.resource_type==\"$TYPE\") ] | length")
+    if [ "$ITEM_COUNT" -eq 0 ]; then
         echo "<div class='status-ok'>✅ 所有 $TYPE 正常</div>" >> "$HTML_FILE"
     else
-        echo "$ITEMS" | while read -r item; do
+        echo "$JSON_DATA" | jq -c ".[] | select(.resource_type==\"$TYPE\")" | while read -r item; do
             NAME=$(echo "$item" | jq -r '.name')
             STATUS=$(echo "$item" | jq -r '.status')
             case "$STATUS" in
@@ -67,7 +72,9 @@ for TYPE in "${RESOURCE_TYPES[@]}"; do
     fi
 done
 
+# -------------------------------
 # Footer
+# -------------------------------
 cat >> "$HTML_FILE" <<EOF
 <div style="margin-top:20px;font-size:12px;color:#888;text-align:center">
 生成时间: $(date '+%Y-%m-%d %H:%M:%S')
@@ -77,6 +84,4 @@ cat >> "$HTML_FILE" <<EOF
 </html>
 EOF
 
-ln -sf "$(basename "$HTML_FILE")" "$LATEST_FILE"
-echo "✅ HTML 报告生成完成: $HTML_FILE"
-echo "🔗 最新报告快捷链接: $LATEST_FILE"
+ln -sf "$(basename "$HTML_FILE")" "$LATEST_
