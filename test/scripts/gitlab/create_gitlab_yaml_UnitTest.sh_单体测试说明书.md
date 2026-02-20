@@ -31,22 +31,22 @@
 
 ```bash
 curl -L \
-  https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/test/scripts/gitlab/gitlab_yaml_gen_UnitTest.sh \
-  -o gitlab_yaml_gen_UnitTest.sh
+  https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/test/scripts/gitlab/create_gitlab_yaml_UnitTest.sh \
+  -o create_gitlab_yaml_UnitTest.sh
 
 赋予执行权限：
 
-chmod +x gitlab_yaml_gen_UnitTest.sh
+chmod +x create_gitlab_yaml_UnitTest.sh
 
 确认测试目录不存在，或手动清理旧文件：
 
 rm -rf $HOME/gitlab_scripts/*
 2️⃣ 执行测试
-./gitlab_yaml_gen_UnitTest.sh
+./create_gitlab_yaml_UnitTest.sh
 
 或者传入自定义参数：
 
-./gitlab_yaml_gen_UnitTest.sh GitLab_Test /tmp/gitlab_test ns-test-gitlab sc-fast 50Gi gitlab/gitlab-ce:15.0 gitlab.test.local 192.168.50.10 35050 30022 30080
+./create_gitlab_yaml_UnitTest.sh GitLab_Test /tmp/gitlab_test ns-test-gitlab sc-fast 50Gi gitlab/gitlab-ce:15.0 gitlab.test.local 192.168.50.10 35050 30022 30080
 3️⃣ 期望控制台输出
 ✅ GitLab YAML 已生成到 /tmp/gitlab_test
 📦 Namespace: GitLab_Test_namespace.yaml
