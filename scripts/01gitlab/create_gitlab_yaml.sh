@@ -5,7 +5,7 @@ set -euo pipefail
 # GitLab YAML 生成脚本（生产级增强版）
 #########################################
 
-VERSION="v1.0.1"
+VERSION="v1.0.2"
 LAST_MODIFIED="2026-02-21"
 AUTHOR="zdl@cmaster01"
 
@@ -137,7 +137,7 @@ spec:
     name: registry"
 
 #########################################
-# CronJob YAML（修正 command，保证 registry-garbage-collect 存在）
+# CronJob YAML（生产级，挂载 PVC）
 #########################################
 write_file "${MODULE}_cronjob.yaml" \
 "apiVersion: batch/v1
@@ -158,9 +158,16 @@ spec:
               - /bin/sh
               - -c
               - |
-                echo backup
+                echo '执行 GitLab registry-garbage-collect'
                 registry-garbage-collect /var/opt/gitlab/gitlab-rails/etc/gitlab.yml
-          restartPolicy: OnFailure"
+            volumeMounts:
+              - name: gitlab-data
+                mountPath: /var/opt/gitlab
+          restartPolicy: OnFailure
+          volumes:
+            - name: gitlab-data
+              persistentVolumeClaim:
+                claimName: $SECRET"
 
 #########################################
 # 完成提示
