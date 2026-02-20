@@ -1,21 +1,31 @@
 #!/bin/bash
 # ===================================================
-# GitLab HA 控制脚本（详细执行监控 v1.3）
+# GitLab HA 控制脚本（逐行执行可见 v1.4）
+# 日期：2026-02-21
 # 功能：
 #   - 强制下载最新 JSON / HTML 脚本
 #   - 执行 JSON 检测 + 实时日志
 #   - 轮询 JSON 输出（倒计时显示）
+#   - 每条命令都有说明
 #   - Pod/PVC/Namespace/Service 异常统计
 #   - 生成 HTML 报告
-#   - 显示脚本版本号、工作目录
 # ===================================================
 
 set -euo pipefail
-
-SCRIPT_VERSION="v1.3"
+SCRIPT_VERSION="v1.4"
 MODULE_NAME="${1:-GitLab_HA}"
 WORK_DIR=$(mktemp -d)
 JSON_LOG="$WORK_DIR/json.log"
+TMP_JSON="$WORK_DIR/tmp_json_output.json"
+> "$TMP_JSON"
+
+# -------------------------
+# 逐行执行函数
+# -------------------------
+run() {
+    echo -e "\033[34m🔹 执行: $*\033[0m"
+    "$@"
+}
 
 echo -e "=============================="
 echo -e "🔹 执行 GitLab 控制脚本"
@@ -24,18 +34,7 @@ echo -e "🔹 工作目录: $WORK_DIR"
 echo -e "=============================="
 
 # -------------------------
-# 下载脚本函数
-# -------------------------
-download_script() {
-    local url="$1"
-    local dest="$2"
-    echo -e "\n🔹 强制下载最新脚本: $url"
-    curl -sSL "$url" -o "$dest"
-    chmod +x "$dest"
-}
-
-# -------------------------
-# 脚本 URL
+# 下载远程脚本
 # -------------------------
 JSON_SCRIPT_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/01gitlab/check_gitlab_names_json.sh"
 HTML_SCRIPT_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/01gitlab/check_gitlab_names_html.sh"
@@ -43,20 +42,19 @@ HTML_SCRIPT_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-Syste
 JSON_SCRIPT="$WORK_DIR/check_gitlab_names_json.sh"
 HTML_SCRIPT="$WORK_DIR/check_gitlab_names_html.sh"
 
-download_script "$JSON_SCRIPT_URL" "$JSON_SCRIPT"
-download_script "$HTML_SCRIPT_URL" "$HTML_SCRIPT"
+echo -e "\n🔹 下载最新 JSON 脚本..."
+run curl -sSL "$JSON_SCRIPT_URL" -o "$JSON_SCRIPT"
+run chmod +x "$JSON_SCRIPT"
 
-# -------------------------
-# 临时 JSON 文件
-# -------------------------
-TMP_JSON="$WORK_DIR/tmp_json_output.json"
-> "$TMP_JSON"
+echo -e "\n🔹 下载最新 HTML 脚本..."
+run curl -sSL "$HTML_SCRIPT_URL" -o "$HTML_SCRIPT"
+run chmod +x "$HTML_SCRIPT"
 
 # -------------------------
 # 执行 JSON 脚本并实时输出
 # -------------------------
 echo -e "\n🔹 执行 JSON 检测脚本..."
-bash "$JSON_SCRIPT" > >(tee -a "$TMP_JSON") 2> >(tee -a "$JSON_LOG" >&2) &
+run bash "$JSON_SCRIPT" > >(tee -a "$TMP_JSON") 2> >(tee -a "$JSON_LOG" >&2) &
 JSON_PID=$!
 
 # -------------------------
@@ -71,7 +69,7 @@ while [ $COUNT -lt $MAX_RETRIES ]; do
         break
     fi
     ((COUNT++))
-    echo -ne "\r🔄 [$COUNT/$MAX_RETRIES] 等待 JSON 文件生成... 3s倒计时 "
+    echo -ne "\r🔄 [$COUNT/$MAX_RETRIES] 等待 JSON 文件生成... 3秒倒计时 "
     for i in {3..1}; do
         echo -ne "$i "
         sleep 1
@@ -92,11 +90,13 @@ EXIT_CODE=$?
 # -------------------------
 # JSON 格式检查
 # -------------------------
+echo -e "\n🔹 检查 JSON 格式..."
 if ! jq empty "$TMP_JSON" 2>/dev/null; then
     echo -e "\033[31m❌ JSON 文件格式错误\033[0m"
     head -n 20 "$TMP_JSON"
     exit 1
 fi
+echo -e "✅ JSON 格式合法"
 
 # -------------------------
 # 即时预览 JSON 前 5 行
@@ -107,6 +107,7 @@ head -n 5 "$TMP_JSON"
 # -------------------------
 # 异常统计与详细输出
 # -------------------------
+echo -e "\n🔹 检查 Pod/PVC/Namespace/Service 异常..."
 POD_ISSUES=$(jq '[.[] | select(.resource_type=="Pod" and .status!="Running")] | length' < "$TMP_JSON")
 PVC_ISSUES=$(jq '[.[] | select(.resource_type=="PVC" and .status!="命名规范")] | length' < "$TMP_JSON")
 NS_ISSUES=$(jq '[.[] | select(.resource_type=="Namespace" and .status!="存在")] | length' < "$TMP_JSON")
@@ -121,12 +122,13 @@ SVC_ISSUES=$(jq '[.[] | select(.resource_type=="Service" and .status!="存在")]
 # 生成 HTML 报告
 # -------------------------
 echo -e "\n🔹 生成 HTML 报告..."
-"$HTML_SCRIPT" "$MODULE_NAME" "$TMP_JSON"
+run "$HTML_SCRIPT" "$MODULE_NAME" "$TMP_JSON"
 
 # -------------------------
 # 清理
 # -------------------------
-rm -f "$TMP_JSON"
-rm -rf "$WORK_DIR"
+echo -e "\n🔹 清理临时文件..."
+run rm -f "$TMP_JSON"
+run rm -rf "$WORK_DIR"
 
 echo -e "\n✅ GitLab 控制脚本执行完成: 模块=$MODULE_NAME, 版本=$SCRIPT_VERSION"
