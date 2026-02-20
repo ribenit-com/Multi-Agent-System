@@ -4,7 +4,7 @@ set -e
 source ./check_gitlab_names_json.sh
 
 #########################################
-# 测试框架（极简）
+# 极简断言
 #########################################
 assert_equal() {
   expected="$1"
@@ -21,7 +21,6 @@ assert_equal() {
 #########################################
 # mock kubectl
 #########################################
-
 mock_kctl() {
   case "$*" in
 
@@ -58,25 +57,66 @@ kctl() {
   mock_kctl "$@"
 }
 
-#########################################
+########################################################
 # UT-01 namespace 不存在 => error
-#########################################
+########################################################
 json_entries=()
 MODE="audit"
 check_namespace
 result=$(calculate_summary)
 assert_equal "error" "$result"
 
-#########################################
-# UT-06 汇总逻辑测试
-#########################################
+########################################################
+# UT-02 enforce 模式 => warning
+########################################################
+json_entries=()
+MODE="enforce"
+check_namespace
+result=$(calculate_summary)
+assert_equal "warning" "$result"
+
+########################################################
+# UT-03 service 不存在 => error
+########################################################
+json_entries=()
+MODE="audit"
+check_service
+result=$(calculate_summary)
+assert_equal "error" "$result"
+
+########################################################
+# UT-04 pvc 命名不规范 => warning
+########################################################
+json_entries=()
+check_pvc
+result=$(calculate_summary)
+assert_equal "warning" "$result"
+
+########################################################
+# UT-05 pod 非 Running => error
+########################################################
+json_entries=()
+check_pod
+result=$(calculate_summary)
+assert_equal "error" "$result"
+
+########################################################
+# UT-06 calculate_summary 有 error => error
+########################################################
+json_entries=("error" "warning")
+result=$(calculate_summary)
+assert_equal "error" "$result"
+
+########################################################
+# UT-07 calculate_summary 仅 warning => warning
+########################################################
 json_entries=("warning" "warning")
 result=$(calculate_summary)
 assert_equal "warning" "$result"
 
-#########################################
-# UT-08 全部正常
-#########################################
+########################################################
+# UT-08 calculate_summary 无异常 => ok
+########################################################
 json_entries=()
 result=$(calculate_summary)
 assert_equal "ok" "$result"
