@@ -1,85 +1,54 @@
 #!/bin/bash
 set -euo pipefail
 
-MODULE="GitLab_YAML"
+#########################################
+# 配置
+#########################################
+SCRIPT_NAME="create_gitlab_yaml.sh"
+RAW_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/scripts/01gitlab/create_gitlab_yaml.sh"
+VERSION="v1.0.0"   # 这里可以手动更新，也可以在远程脚本中解析
 WORK_DIR=$(mktemp -d)
 LOG_FILE="$WORK_DIR/create_gitlab_yaml.log"
 
-# 统一日志函数
+#########################################
+# 日志函数
+#########################################
 log() {
     local msg="$1"
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $msg" | tee -a "$LOG_FILE"
 }
 
-log "🔹 开始生成 GitLab YAML"
-log "🔹 临时目录: $WORK_DIR"
+#########################################
+# Header 输出
+#########################################
+log "===================================="
+log "📌 脚本: $SCRIPT_NAME"
+log "📌 版本: $VERSION"
+log "📌 临时目录: $WORK_DIR"
+log "===================================="
 
-# 示例：生成 Namespace YAML
-NAMESPACE_FILE="$WORK_DIR/GitLab_Test_namespace.yaml"
-log "📦 生成 Namespace YAML: $NAMESPACE_FILE"
-cat <<EOF >"$NAMESPACE_FILE"
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: gitlab-test
-EOF
-log "✅ Namespace YAML 已生成"
+#########################################
+# 强制下载最新脚本
+#########################################
+download_script() {
+    local target="$WORK_DIR/$SCRIPT_NAME"
+    log "⬇️ 强制下载最新脚本: $RAW_URL"
+    curl -fsSL "$RAW_URL" -o "$target" || {
+        log "❌ 下载失败，请检查网络或 URL"
+        exit 1
+    }
+    chmod +x "$target"
+    log "✅ 下载完成并已赋予执行权限: $target"
+    echo "$target"
+}
 
-# 示例：生成 Secret YAML
-SECRET_FILE="$WORK_DIR/GitLab_Test_secret.yaml"
-log "📦 生成 Secret YAML: $SECRET_FILE"
-cat <<EOF >"$SECRET_FILE"
-apiVersion: v1
-kind: Secret
-metadata:
-  name: gitlab-secret
-  namespace: gitlab-test
-type: Opaque
-stringData:
-  password: "secret123"
-EOF
-log "✅ Secret YAML 已生成"
+SCRIPT_PATH=$(download_script)
 
-# 示例：生成 StatefulSet YAML
-STATEFULSET_FILE="$WORK_DIR/GitLab_Test_statefulset.yaml"
-log "📦 生成 StatefulSet YAML: $STATEFULSET_FILE"
-cat <<EOF >"$STATEFULSET_FILE"
-apiVersion: apps/v1
-kind: StatefulSet
-metadata:
-  name: gitlab
-  namespace: gitlab-test
-spec:
-  replicas: 1
-EOF
-log "✅ StatefulSet YAML 已生成"
+#########################################
+# 执行核心脚本
+#########################################
+log "▶️ 执行核心脚本: $SCRIPT_PATH"
+# 如果核心脚本本身需要参数，可以在这里传入，例如: $SCRIPT_PATH arg1 arg2
+bash "$SCRIPT_PATH" "$WORK_DIR"
 
-# 生成 Service YAML
-SERVICE_FILE="$WORK_DIR/GitLab_Test_service.yaml"
-log "📦 生成 Service YAML: $SERVICE_FILE"
-cat <<EOF >"$SERVICE_FILE"
-apiVersion: v1
-kind: Service
-metadata:
-  name: gitlab-service
-  namespace: gitlab-test
-spec:
-  type: ClusterIP
-EOF
-log "✅ Service YAML 已生成"
-
-# 生成 CronJob YAML
-CRONJOB_FILE="$WORK_DIR/GitLab_Test_cronjob.yaml"
-log "📦 生成 CronJob YAML: $CRONJOB_FILE"
-cat <<EOF >"$CRONJOB_FILE"
-apiVersion: batch/v1
-kind: CronJob
-metadata:
-  name: gitlab-backup
-  namespace: gitlab-test
-spec:
-  schedule: "0 2 * * *"
-EOF
-log "✅ CronJob YAML 已生成"
-
-log "🎉 所有 YAML 生成完成，目录: $WORK_DIR"
+log "🎉 脚本执行完成，所有 YAML 文件在: $WORK_DIR"
