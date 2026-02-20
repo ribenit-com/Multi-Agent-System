@@ -1,7 +1,8 @@
 #!/bin/bash
 # =============================================================
 # GitLab YAML + JSON + HTML 生成脚本（固定输出目录版）
-# 输出目录: /mnt/truenas/Gitlab_yaml_output
+# YAML 文件 + yaml_list.json: /mnt/truenas/Gitlab_yaml_output
+# LOG / HTML: /mnt/truenas/Gitlab_output
 # =============================================================
 
 set -euo pipefail
@@ -9,19 +10,22 @@ set -euo pipefail
 #########################################
 # 配置固定输出目录
 #########################################
-LOG_DIR="/mnt/truenas/Gitlab_yaml_output"
-mkdir -p "$LOG_DIR"
+YAML_DIR="/mnt/truenas/Gitlab_yaml_output"
+OUTPUT_DIR="/mnt/truenas/Gitlab_output"
+
+mkdir -p "$YAML_DIR" "$OUTPUT_DIR"
 
 # 全量详尽日志
-FULL_LOG="$LOG_DIR/full_script.log"
+FULL_LOG="$OUTPUT_DIR/full_script.log"
 
 # JSON / HTML 输出
-JSON_FILE="$LOG_DIR/yaml_list.json"
-HTML_FILE="$LOG_DIR/postgres_ha_info.html"
+JSON_FILE="$YAML_DIR/yaml_list.json"
+HTML_FILE="$OUTPUT_DIR/postgres_ha_info.html"
 
 # 输出简要信息到终端
 echo "📄 全量日志文件: $FULL_LOG"
-echo "📄 输出目录: $LOG_DIR"
+echo "📄 YAML 输出目录: $YAML_DIR"
+echo "📄 LOG/HTML 输出目录: $OUTPUT_DIR"
 
 # 重定向 stdout/stderr 到日志文件
 exec 3>&1 4>&2
@@ -32,9 +36,9 @@ export PS4='+[$LINENO] '
 set -x
 
 #########################################
-# 模块名
+# 模块名/前缀
 #########################################
-MODULE="GitLab_Test"
+PREFIX="gb"
 
 #########################################
 # YAML 文件生成函数
@@ -42,18 +46,18 @@ MODULE="GitLab_Test"
 write_file() {
     local filename="$1"
     local content="$2"
-    echo "$content" > "$LOG_DIR/$filename"
+    echo "$content" > "$YAML_DIR/$filename"
 }
 
 #########################################
 # 生成 YAML 文件
 #########################################
-write_file "${MODULE}_namespace.yaml" "apiVersion: v1
+write_file "${PREFIX}_namespace.yaml" "apiVersion: v1
 kind: Namespace
 metadata:
   name: ns-test-gitlab"
 
-write_file "${MODULE}_secret.yaml" "apiVersion: v1
+write_file "${PREFIX}_secret.yaml" "apiVersion: v1
 kind: Secret
 metadata:
   name: sc-fast
@@ -62,7 +66,7 @@ type: Opaque
 stringData:
   root-password: 'secret123'"
 
-write_file "${MODULE}_statefulset.yaml" "apiVersion: apps/v1
+write_file "${PREFIX}_statefulset.yaml" "apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: gitlab
@@ -96,7 +100,7 @@ spec:
         requests:
           storage: 50Gi"
 
-write_file "${MODULE}_service.yaml" "apiVersion: v1
+write_file "${PREFIX}_service.yaml" "apiVersion: v1
 kind: Service
 metadata:
   name: gitlab-service
@@ -116,7 +120,7 @@ spec:
     nodePort: 35050
     name: registry"
 
-write_file "${MODULE}_cronjob.yaml" "apiVersion: batch/v1
+write_file "${PREFIX}_cronjob.yaml" "apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: gitlab-backup
@@ -148,7 +152,7 @@ spec:
 #########################################
 # 生成 JSON 文件
 #########################################
-yaml_files=("$LOG_DIR"/*.yaml)
+yaml_files=("$YAML_DIR"/*.yaml)
 printf '%s\n' "${yaml_files[@]}" | jq -R . | jq -s . > "$JSON_FILE"
 
 #########################################
@@ -157,7 +161,7 @@ printf '%s\n' "${yaml_files[@]}" | jq -R . | jq -s . > "$JSON_FILE"
 {
     echo "<html><head><title>GitLab YAML & JSON 状态</title></head><body>"
     echo "<h2>生成时间: $(date '+%Y-%m-%d %H:%M:%S')</h2>"
-    echo "<h3>输出目录: $LOG_DIR</h3>"
+    echo "<h3>YAML 输出目录: $YAML_DIR</h3>"
     echo "<h3>JSON 文件: $JSON_FILE</h3>"
     echo "<h3>YAML 文件列表:</h3><ul>"
     for f in "${yaml_files[@]}"; do
@@ -176,5 +180,6 @@ set +x
 # 恢复 stdout/stderr 到终端
 exec 1>&3 2>&4
 
-echo "✅ YAML / JSON / HTML 已生成在 $LOG_DIR"
+echo "✅ YAML + JSON 已生成在 $YAML_DIR"
+echo "✅ HTML / 日志已生成在 $OUTPUT_DIR"
 echo "📄 全量日志: $FULL_LOG"
