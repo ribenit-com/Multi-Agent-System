@@ -1,7 +1,7 @@
-# check_postgres_names_html.sh 单体测试说明书
+# check_gitlab_names_html.sh 单体测试说明书
 
 版本：v2.0  
-模块：PostgreSQL_HA  
+模块：GitLab_HA  
 类型：HTML 报告生成模块  
 性质：展示型脚本（无业务判断逻辑）
 
@@ -29,8 +29,8 @@
 ```bash
 cat <<EOF > test.json
 {
-  "namespace": "ns-postgres-ha",
-  "statefulset": "sts-postgres-ha",
+  "namespace": "ns-gitlab-ha",
+  "statefulset": "sts-gitlab-ha",
   "status": "ok"
 }
 EOF
@@ -41,7 +41,7 @@ EOF
 ## 2️⃣ 执行测试脚本
 
 ```bash
-./check_postgres_names_html.sh "PostgreSQL_HA" test.json
+./check_gitlab_names_html.sh "GitLab_HA" test.json
 ```
 
 ---
@@ -49,8 +49,8 @@ EOF
 ## 3️⃣ 期望控制台输出
 
 ```text
-✅ HTML 报告生成完成: /mnt/truenas/PostgreSQL安装报告书/PostgreSQL_HA_命名规约检测报告_YYYYMMDD_HHMMSS.html
-🔗 最新报告链接: /mnt/truenas/PostgreSQL安装报告书/latest.html
+✅ HTML 报告生成完成: /mnt/truenas/GitLab安装报告书/GitLab_HA_命名规约检测报告_YYYYMMDD_HHMMSS.html
+🔗 最新报告链接: /mnt/truenas/GitLab安装报告书/latest.html
 ```
 
 ---
@@ -58,14 +58,14 @@ EOF
 ## 4️⃣ 验证文件生成
 
 ```bash
-ls -l /mnt/truenas/PostgreSQL安装报告书/
+ls -l /mnt/truenas/GitLab安装报告书/
 ```
 
 期望看到：
 
 ```text
-PostgreSQL_HA_命名规约检测报告_时间戳.html
-latest.html -> PostgreSQL_HA_命名规约检测报告_时间戳.html
+GitLab_HA_命名规约检测报告_时间戳.html
+latest.html -> GitLab_HA_命名规约检测报告_时间戳.html
 ```
 
 ---
@@ -73,15 +73,15 @@ latest.html -> PostgreSQL_HA_命名规约检测报告_时间戳.html
 ## 5️⃣ 验证 HTML 内容
 
 ```bash
-cat /mnt/truenas/PostgreSQL安装报告书/latest.html
+cat /mnt/truenas/GitLab安装报告书/latest.html
 ```
 
 应包含：
 
 ```html
-<h1>PostgreSQL_HA 命名规约检测报告</h1>
+<h1>GitLab_HA 命名规约检测报告</h1>
 <pre>{
-  "namespace": "ns-postgres-ha"
+  "namespace": "ns-gitlab-ha"
 ...
 </pre>
 ```
@@ -103,7 +103,7 @@ EOF
 ## 执行脚本
 
 ```bash
-./check_postgres_names_html.sh "PostgreSQL_HA" test_escape.json
+./check_gitlab_names_html.sh "GitLab_HA" test_escape.json
 ```
 
 ## 期望 HTML 内容显示为
@@ -150,7 +150,7 @@ EOF
 
 # 七、结论
 
-check_postgres_names_html.sh 属于：
+check_gitlab_names_html.sh 属于：
 
 - 纯展示层
 - 与 JSON 生成模块解耦
