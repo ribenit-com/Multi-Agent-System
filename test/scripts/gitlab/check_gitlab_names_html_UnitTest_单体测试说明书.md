@@ -1,4 +1,4 @@
-# check_gitlab_names_html.sh 单体测试说明书（v3.0）
+# check_gitlab_names_html.sh 单体测试说明书（v3.1）
 
 **模块**：GitLab HA  
 **类型**：HTML 报告生成  
@@ -18,6 +18,8 @@
 | UT-06 | HTML转义 | JSON 含 `< > &` | 正确转义为 HTML 实体 |
 | UT-07 | latest 软链接 | 已存在旧 latest.html | 正确覆盖为最新报告 |
 | UT-08 | 输出提示 | 执行成功 | 输出成功路径与最新链接 |
+| UT-09 | JSON数组处理 | JSON 为数组 | 正确生成 HTML，无报错 |
+| UT-10 | 日本语字符 | JSON 含日文内容 | HTML 文件为 UTF-8 编码，显示正常 |
 
 ---
 
@@ -27,93 +29,100 @@
 
 1. 下载单体测试脚本：
 
-    ```bash
-    curl -L \
-      https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/test/scripts/gitlab/check_gitlab_names_html_UnitTest.sh \
-      -o check_gitlab_names_html_UnitTest.sh
-    ```
+```bash
+curl -L \
+  https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/test/scripts/gitlab/check_gitlab_names_html_UnitTest.sh \
+  -o check_gitlab_names_html_UnitTest.sh
+```
 
 2. 赋予执行权限：
 
-    ```bash
-    chmod +x check_gitlab_names_html_UnitTest.sh
-    ```
+```bash
+chmod +x check_gitlab_names_html_UnitTest.sh
+```
 
-3. 准备测试 JSON 文件：
+3. 准备测试 JSON 文件示例：
 
-    ```bash
-    cat <<EOF > test.json
-    {
-      "namespace": "ns-gitlab-ha",
-      "statefulset": "sts-gitlab-ha",
-      "status": "ok"
-    }
-    EOF
-    ```
+```bash
+cat <<EOF > test.json
+{
+  "namespace": "ns-gitlab-ha",
+  "statefulset": "sts-gitlab-ha",
+  "status": "ok"
+}
+EOF
+```
 
 ---
 
 ## 2️⃣ 执行测试
 
-    ```bash
-    ./check_gitlab_names_html_UnitTest.sh
-    ```
+```bash
+./check_gitlab_names_html_UnitTest.sh
+```
 
 ---
 
 ## 3️⃣ 期望控制台输出
 
-    ```text
-    ✅ PASS
-    ✅ PASS
-    ✅ PASS
-    ✅ PASS
-    ✅ PASS
-    ✅ PASS
-    ✅ PASS
-    ✅ PASS
-    🎉 All tests passed (v3 enterprise level)
-    ```
+```text
+✅ PASS
+✅ PASS
+✅ PASS
+✅ PASS
+✅ PASS
+✅ PASS
+✅ PASS
+✅ PASS
+✅ PASS
+✅ PASS
+🎉 全てのテストが成功しました！
+```
+
+> 注：如果使用英文输出版本，可显示 `🎉 All tests passed (v3 enterprise level)`
 
 ---
 
 ## 4️⃣ 验证文件生成
 
-    ```bash
-    ls -l /mnt/truenas/GitLab安装报告书/
-    ```
+```bash
+ls -l /mnt/truenas/GitLab安装报告书/
+```
 
 期望看到：
 
-    ```text
-    GitLab_HA_命名规约检测报告_时间戳.html
-    latest.html -> GitLab_HA_命名规约检测报告_时间戳.html
-    ```
+```text
+GitLab_HA_命名规约检测报告_时间戳.html
+latest.html -> GitLab_HA_命名规约检测报告_时间戳.html
+```
 
 ---
 
 ## 5️⃣ 验证 HTML 内容
 
-    ```bash
-    cat /mnt/truenas/GitLab安装报告书/latest.html
-    ```
+```bash
+cat /mnt/truenas/GitLab安装报告书/latest.html
+```
 
 应包含：
 
-    ```html
-    <h1>GitLab_HA 命名规约检测报告</h1>
-    <pre>{
-      "namespace": "ns-gitlab-ha",
-      ...
-    }</pre>
-    ```
+```html
+<h1>GitLab_HA 命名规约检测报告</h1>
+<pre>{
+  "namespace": "ns-gitlab-ha",
+  "statefulset": "sts-gitlab-ha",
+  "status": "ok"
+}</pre>
+```
+
+> 注意：这里 JSON 内容可根据实际输入不同，`<pre>` 内显示完整 JSON。
 
 ---
 
 # 三、测试逻辑说明
 
 1. **函数行为**  
-   - 每个 UT 都会调用对应功能点：
+   - 每个 UT 都会调用对应功能点：  
      - 参数校验  
      - 输出目录创建  
      - HTML 文件生成  
@@ -122,7 +131,7 @@
 
 2. **内部状态验证**  
    - UT-01 ~ UT-03 使用 `assert_equal` 验证 exit code 和输出信息  
-   - UT-04 ~ UT-08 使用 `assert_file_exists` / `assert_file_contains` 验证文件和内容正确性  
+   - UT-04 ~ UT-10 使用 `assert_file_exists` / `assert_file_contains` 验证文件和内容正确性  
 
 3. **断言工具**  
    - `assert_equal` 验证输出和返回值  
@@ -135,10 +144,10 @@
 
 该脚本属于展示型模块：
 
-    ```bash
-    exit 0    # 执行成功
-    exit 1    # 参数错误或 JSON 文件不存在
-    ```
+```bash
+exit 0    # 执行成功
+exit 1    # 参数错误或 JSON 文件不存在
+```
 
 - 不解析 JSON  
 - 不进行 error/warning 业务判断  
@@ -154,6 +163,8 @@
 | 输出目录无法创建 | bash 报错退出 |
 | 正常执行 | 生成 HTML 并输出路径与 latest 链接 |
 | JSON 含特殊字符 `< > &` | 转义为 HTML 实体 |
+| JSON 为数组 | 正常生成 HTML，无报错 |
+| JSON 含日文内容 | HTML 文件为 UTF-8 编码，显示正常 |
 
 ---
 
@@ -176,4 +187,4 @@
 - 可作为企业自动化交付报告模块  
 - 适合集成到主控脚本流水线  
 - 支持 CI/CD 交付物生成  
-- v3 测试覆盖行为 + 文件生成 + 内容校验
+- v3 测试覆盖行为 + 文件生成 + 内容校验  
