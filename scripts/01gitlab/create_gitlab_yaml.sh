@@ -1,10 +1,9 @@
 #!/bin/bash
 # ===================================================
-# GitLab 内网生产环境 YAML 生成脚本（优化版）
+# GitLab 内网生产环境 YAML 生成脚本（企业级标准化命名）
 # 功能：
-#   - 根据参数生成 Namespace、Secret、StatefulSet、Service、PVC、CronJob YAML
-#   - 支持动态 PVC（StorageClass）
-#   - 支持优化资源、健康探针、Registry GC
+#   - 自动生成 Namespace、Secret、StatefulSet、Service、PVC、CronJob YAML
+#   - 遵循企业命名规则手册
 # ===================================================
 
 set -euo pipefail
@@ -12,22 +11,22 @@ set -euo pipefail
 # -----------------------------
 # 配置参数（可通过命令行覆盖）
 # -----------------------------
-MODULE="${1:-GitLab_Prod}"                   # 模块名
-WORK_DIR="${2:-$HOME/gitlab_scripts}"        # 输出目录
-NAMESPACE="${3:-ns-gitlab}"                  # Namespace
-STORAGE_CLASS="${4:-sc-ssd-high}"            # PVC StorageClass
-PVC_SIZE="${5:-200Gi}"                        # PVC 容量
-GITLAB_IMAGE="${6:-gitlab/gitlab-ce:latest}" # GitLab 镜像
-DOMAIN="${7:-gitlab.local}"                  # GitLab 外部访问域名
-NODE_IP="${8:-192.168.1.100}"               # 内网节点 IP
-REGISTRY_PORT="${9:-35050}"                  # NodePort Registry
-SSH_PORT="${10:-30022}"                       # NodePort SSH
-HTTP_PORT="${11:-30080}"                      # NodePort HTTP
+MODULE="${1:-GitLab_Prod}"                   
+WORK_DIR="${2:-$HOME/gitlab_scripts}"        
+NAMESPACE="${3:-ns-app-gitlab-prod}"        
+STORAGE_CLASS="${4:-sc-ssd-high}"            
+PVC_SIZE="${5:-200Gi}"                        
+GITLAB_IMAGE="${6:-gitlab/gitlab-ce:latest}" 
+DOMAIN="${7:-gitlab.enterprise.local}"      
+NODE_IP="${8:-192.168.1.100}"               
+REGISTRY_PORT="${9:-35050}"                  
+SSH_PORT="${10:-30022}"                       
+HTTP_PORT="${11:-30080}"                      
 
 mkdir -p "$WORK_DIR"
 
 # -----------------------------
-# 生成 Namespace YAML
+# Namespace
 # -----------------------------
 cat <<EOF > "$WORK_DIR/${MODULE}_namespace.yaml"
 apiVersion: v1
@@ -37,37 +36,37 @@ metadata:
 EOF
 
 # -----------------------------
-# 生成 Secret YAML
+# Secret
 # -----------------------------
 cat <<EOF > "$WORK_DIR/${MODULE}_secret.yaml"
 apiVersion: v1
 kind: Secret
 metadata:
-  name: gitlab-secrets
+  name: secret-app-gitlab
   namespace: $NAMESPACE
 stringData:
   root-password: "ReplaceWithStrongRandomPassword123!"
 EOF
 
 # -----------------------------
-# 生成 StatefulSet + PVC YAML
+# StatefulSet + PVC
 # -----------------------------
 cat <<EOF > "$WORK_DIR/${MODULE}_statefulset.yaml"
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
-  name: sts-gitlab
+  name: sts-app-gitlab
   namespace: $NAMESPACE
 spec:
-  serviceName: svc-gitlab
+  serviceName: svc-app-gitlab
   replicas: 1
   selector:
     matchLabels:
-      app: gitlab
+      app: app-gitlab
   template:
     metadata:
       labels:
-        app: gitlab
+        app: app-gitlab
     spec:
       containers:
       - name: gitlab
@@ -128,18 +127,18 @@ spec:
 EOF
 
 # -----------------------------
-# 生成 NodePort Service YAML
+# Service
 # -----------------------------
 cat <<EOF > "$WORK_DIR/${MODULE}_service.yaml"
 apiVersion: v1
 kind: Service
 metadata:
-  name: svc-gitlab-nodeport
+  name: svc-app-gitlab
   namespace: $NAMESPACE
 spec:
   type: NodePort
   selector:
-    app: gitlab
+    app: app-gitlab
   ports:
   - name: http
     port: 80
@@ -156,16 +155,16 @@ spec:
 EOF
 
 # -----------------------------
-# 生成 CronJob YAML（Registry GC）
+# CronJob (Registry GC)
 # -----------------------------
 cat <<EOF > "$WORK_DIR/${MODULE}_cronjob.yaml"
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: gitlab-gc-worker
+  name: cron-app-gitlab-gc
   namespace: $NAMESPACE
 spec:
-  schedule: "0 3 * * 0" # 每周日凌晨3点
+  schedule: "0 3 * * 0"
   jobTemplate:
     spec:
       template:
