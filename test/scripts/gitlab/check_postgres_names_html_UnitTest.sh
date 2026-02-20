@@ -5,13 +5,13 @@ set -e
 # 1️⃣ 自动下载被测试脚本
 #########################################
 
-TARGET_SCRIPT="check_postgres_names_html.sh"
+TARGET_SCRIPT="check_gitlab_names_html.sh"
 
 if [ ! -f "$TARGET_SCRIPT" ]; then
   echo "⬇️ Downloading target script..."
 
   curl -L \
-  https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/PostgreSQL安装包/check_postgres_names_html.sh \
+  https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/PostgreSQL安装包/check_postgresql_names_html.sh \
   -o "$TARGET_SCRIPT"
 
   chmod +x "$TARGET_SCRIPT"
