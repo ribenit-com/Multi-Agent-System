@@ -10,7 +10,7 @@ TARGET_SCRIPT="check_gitlab_names_json.sh"
 if [ ! -f "$TARGET_SCRIPT" ]; then
   echo "⬇️ Downloading target script..."
 
-  curl -L \
+  curl -f -L \
   https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/01.gitlab%E5%AE%89%E8%A3%85%E5%8C%85/check_gitlab_names_json.sh \
   -o "$TARGET_SCRIPT"
 
@@ -76,42 +76,42 @@ kctl() {
 # 5️⃣ UT-01 ~ UT-08
 #########################################
 
-# UT-01
+# UT-01 audit 模式 namespace 不存在 → error
 json_entries=()
 MODE="audit"
 check_namespace
 assert_equal "error" "$(calculate_summary)"
 
-# UT-02
+# UT-02 enforce 模式 namespace 不存在 → warning
 json_entries=()
 MODE="enforce"
 check_namespace
 assert_equal "warning" "$(calculate_summary)"
 
-# UT-03
+# UT-03 service 不存在 → error
 json_entries=()
 check_service
 assert_equal "error" "$(calculate_summary)"
 
-# UT-04
+# UT-04 pvc 命名异常 → warning
 json_entries=()
 check_pvc
 assert_equal "warning" "$(calculate_summary)"
 
-# UT-05
+# UT-05 pod CrashLoop → error
 json_entries=()
 check_pod
 assert_equal "error" "$(calculate_summary)"
 
-# UT-06
+# UT-06 error + warning → error
 json_entries=("error" "warning")
 assert_equal "error" "$(calculate_summary)"
 
-# UT-07
+# UT-07 全 warning → warning
 json_entries=("warning" "warning")
 assert_equal "warning" "$(calculate_summary)"
 
-# UT-08
+# UT-08 无问题 → ok
 json_entries=()
 assert_equal "ok" "$(calculate_summary)"
 
