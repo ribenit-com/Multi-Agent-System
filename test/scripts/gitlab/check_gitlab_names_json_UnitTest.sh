@@ -2,11 +2,10 @@
 set -e
 
 #########################################
-# 下载执行代码（UnitTest 脚本）
+# 下载执行脚本（UnitTest工具，不含生产函数）
 #########################################
 
 EXEC_SCRIPT="check_gitlab_names_json_UnitTest.sh"
-
 if [ ! -f "$EXEC_SCRIPT" ]; then
   echo "⬇️ Downloading execution script..."
   curl -f -L \
@@ -16,11 +15,10 @@ if [ ! -f "$EXEC_SCRIPT" ]; then
 fi
 
 #########################################
-# 下载被测试脚本（生产代码）
+# 下载生产脚本（被测试函数）
 #########################################
 
 TARGET_SCRIPT="check_gitlab_names_json.sh"
-
 if [ ! -f "$TARGET_SCRIPT" ]; then
   echo "⬇️ Downloading target script..."
   curl -f -L \
@@ -33,7 +31,7 @@ fi
 # 加载生产代码
 #########################################
 
-source ./"$EXEC_SCRIPT"
+source ./"$TARGET_SCRIPT"
 
 #########################################
 # 断言工具
@@ -51,7 +49,6 @@ pass() {
 assert_equal() {
   expected="$1"
   actual="$2"
-
   [[ "$expected" == "$actual" ]] || fail "expected=$expected actual=$actual"
   pass
 }
