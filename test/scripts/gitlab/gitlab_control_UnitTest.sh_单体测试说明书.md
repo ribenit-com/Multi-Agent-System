@@ -34,16 +34,10 @@
 
 #### 1.1 下载被测控制脚本
 
-```bash
-curl -L "https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/scripts/01.gitlab%E5%AE%89%E8%A3%85%E5%8C%85/gitlab_control.sh" -o gitlab_control.sh
-chmod +x gitlab_control.sh
-1.2 下载单体测试脚本
-curl -L "https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/test/scripts/gitlab/gitlab_control_UnitTest.sh" -o gitlab_control_UnitTest.sh
-chmod +x gitlab_control_UnitTest.sh
-1.3 下载 JSON 单体测试脚本
+1.1 下载 JSON 单体测试脚本
 curl -L "https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/test/scripts/gitlab/check_gitlab_names_json_UnitTest.sh" -o check_gitlab_names_json_UnitTest.sh
 chmod +x check_gitlab_names_json_UnitTest.sh
-1.4 准备模拟 JSON 数据
+1.2 准备模拟 JSON 数据
 cat <<EOF > test.json
 [
   {"resource_type":"Pod", "name":"pod-1", "status":"CrashLoopBackOff"},
