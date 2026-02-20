@@ -1,12 +1,12 @@
 #!/bin/bash
 # ===================================================
-# GitLab HA 控制脚本（最新版，每次强制下载）
+# GitLab HA 控制脚本（优化版）
 # 功能：
 #   - 每次下载最新 JSON 检测脚本和 HTML 报告生成脚本
 #   - 执行 JSON 检测
-#   - 轮询等待 JSON 文件生成（带 3 秒读秒显示）
-#   - 检查 JSON 格式
-#   - Pod / PVC 异常统计
+#   - 轮询等待 JSON 文件生成（带 3 秒倒计时）
+#   - 实时显示 JSON 执行日志
+#   - Pod / PVC / Service / Namespace 异常统计
 #   - 生成 HTML 报告
 # ===================================================
 
@@ -49,13 +49,14 @@ download_script "$HTML_SCRIPT_URL" "$HTML_SCRIPT"
 # -------------------------
 # 临时 JSON 文件
 # -------------------------
-TMP_JSON=$(mktemp)
+TMP_JSON="$WORK_DIR/tmp_json_output.json"
+JSON_LOG="$WORK_DIR/json_error.log"
 
 # -------------------------
-# 执行 JSON 脚本并轮询等待输出（带 3 秒读秒显示）
+# 执行 JSON 脚本并轮询等待输出（带 3 秒倒计时）
 # -------------------------
 echo "🔹 执行 JSON 检测脚本..."
-bash "$JSON_SCRIPT" > "$TMP_JSON" 2> "$WORK_DIR/json_error.log" &
+bash "$JSON_SCRIPT" > "$TMP_JSON" 2> "$JSON_LOG" &
 JSON_PID=$!
 
 MAX_RETRIES=10
@@ -76,8 +77,9 @@ done
 
 # 检查轮询结果
 if [ ! -s "$TMP_JSON" ]; then
-    echo -e "\n\033[31m❌ 超时：$JSON_SCRIPT 未能生成 JSON 文件。\033[0m"
-    cat "$WORK_DIR/json_error.log"
+    echo -e "\n\033[31m❌ 超时：$JSON_SCRIPT 未生成 JSON 文件。\033[0m"
+    echo "📄 查看 JSON 执行日志：$JSON_LOG"
+    cat "$JSON_LOG"
     exit 1
 fi
 
@@ -86,8 +88,9 @@ wait $JSON_PID
 EXIT_CODE=$?
 
 if [[ $EXIT_CODE -ne 0 ]]; then
-    echo -e "\033[31m❌ JSON 检测脚本执行失败，查看日志：$WORK_DIR/json_error.log\033[0m"
-    cat "$WORK_DIR/json_error.log"
+    echo -e "\033[31m❌ JSON 检测脚本执行失败 (退出码 $EXIT_CODE)\033[0m"
+    echo "📄 实时 JSON 执行日志：$JSON_LOG"
+    cat "$JSON_LOG"
     exit 1
 fi
 
@@ -101,13 +104,17 @@ if ! jq empty "$TMP_JSON" 2>/dev/null; then
 fi
 
 # -------------------------
-# Pod / PVC 异常统计
+# Pod / PVC / Service / Namespace 异常统计
 # -------------------------
 POD_ISSUES=$(jq '[.[] | select(.resource_type=="Pod" and .status!="Running")] | length' < "$TMP_JSON")
 PVC_ISSUES=$(jq '[.[] | select(.resource_type=="PVC" and .status!="命名规范")] | length' < "$TMP_JSON")
+NS_ISSUES=$(jq '[.[] | select(.resource_type=="Namespace" and .status!="存在")] | length' < "$TMP_JSON")
+SVC_ISSUES=$(jq '[.[] | select(.resource_type=="Service" and .status!="存在")] | length' < "$TMP_JSON")
 
 [[ "$POD_ISSUES" -gt 0 ]] && echo -e "\033[31m⚠️ 检测到 $POD_ISSUES 个 Pod 异常\033[0m"
 [[ "$PVC_ISSUES" -gt 0 ]] && echo -e "\033[33m⚠️ 检测到 $PVC_ISSUES 个 PVC 异常\033[0m"
+[[ "$NS_ISSUES" -gt 0 ]] && echo -e "\033[31m⚠️ 检测到 $NS_ISSUES 个 Namespace 异常\033[0m"
+[[ "$SVC_ISSUES" -gt 0 ]] && echo -e "\033[31m⚠️ 检测到 $SVC_ISSUES 个 Service 异常\033[0m"
 
 # -------------------------
 # 生成 HTML 报告
