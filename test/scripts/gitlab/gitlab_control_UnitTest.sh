@@ -6,7 +6,7 @@ set -euo pipefail
 #########################################
 
 TARGET_SCRIPT="gitlab_control.sh"
-TARGET_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/scripts/01.gitlab%E5%AE%89%E8%A3%85%E5%8C%85/gitlab_control.sh"
+TARGET_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/scripts/01gitlab/gitlab_control.sh"
 
 #########################################
 # 下载生产脚本（如果不存在）并校验非 404
