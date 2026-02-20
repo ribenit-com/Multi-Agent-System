@@ -1,8 +1,8 @@
 #!/bin/bash
 # =============================================================
 # GitLab YAML + JSON + HTML 生成脚本（固定输出目录版）
-# YAML 文件 + yaml_list.json: /mnt/truenas/Gitlab_yaml_output
-# LOG / HTML: /mnt/truenas/Gitlab_output
+# YAML 输出目录: /mnt/truenas/Gitlab_yaml_output
+# 日志/HTML 输出目录: /mnt/truenas/Gitlab_output
 # =============================================================
 
 set -euo pipefail
@@ -12,7 +12,6 @@ set -euo pipefail
 #########################################
 YAML_DIR="/mnt/truenas/Gitlab_yaml_output"
 OUTPUT_DIR="/mnt/truenas/Gitlab_output"
-
 mkdir -p "$YAML_DIR" "$OUTPUT_DIR"
 
 # 全量详尽日志
@@ -25,7 +24,7 @@ HTML_FILE="$OUTPUT_DIR/postgres_ha_info.html"
 # 输出简要信息到终端
 echo "📄 全量日志文件: $FULL_LOG"
 echo "📄 YAML 输出目录: $YAML_DIR"
-echo "📄 LOG/HTML 输出目录: $OUTPUT_DIR"
+echo "📄 输出目录: $OUTPUT_DIR"
 
 # 重定向 stdout/stderr 到日志文件
 exec 3>&1 4>&2
@@ -36,9 +35,9 @@ export PS4='+[$LINENO] '
 set -x
 
 #########################################
-# 模块名/前缀
+# 文件前缀
 #########################################
-PREFIX="gb"
+MODULE="gb"
 
 #########################################
 # YAML 文件生成函数
@@ -52,12 +51,12 @@ write_file() {
 #########################################
 # 生成 YAML 文件
 #########################################
-write_file "${PREFIX}_namespace.yaml" "apiVersion: v1
+write_file "${MODULE}_namespace.yaml" "apiVersion: v1
 kind: Namespace
 metadata:
   name: ns-test-gitlab"
 
-write_file "${PREFIX}_secret.yaml" "apiVersion: v1
+write_file "${MODULE}_secret.yaml" "apiVersion: v1
 kind: Secret
 metadata:
   name: sc-fast
@@ -66,7 +65,7 @@ type: Opaque
 stringData:
   root-password: 'secret123'"
 
-write_file "${PREFIX}_statefulset.yaml" "apiVersion: apps/v1
+write_file "${MODULE}_statefulset.yaml" "apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: gitlab
@@ -100,7 +99,7 @@ spec:
         requests:
           storage: 50Gi"
 
-write_file "${PREFIX}_service.yaml" "apiVersion: v1
+write_file "${MODULE}_service.yaml" "apiVersion: v1
 kind: Service
 metadata:
   name: gitlab-service
@@ -120,7 +119,7 @@ spec:
     nodePort: 35050
     name: registry"
 
-write_file "${PREFIX}_cronjob.yaml" "apiVersion: batch/v1
+write_file "${MODULE}_cronjob.yaml" "apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: gitlab-backup
@@ -180,6 +179,6 @@ set +x
 # 恢复 stdout/stderr 到终端
 exec 1>&3 2>&4
 
-echo "✅ YAML + JSON 已生成在 $YAML_DIR"
-echo "✅ HTML / 日志已生成在 $OUTPUT_DIR"
-echo "📄 全量日志: $FULL_LOG"
+echo "✅ YAML / JSON / HTML 已生成"
+echo "📄 YAML 输出目录: $YAML_DIR"
+echo "📄 全量日志/HTML: $OUTPUT_DIR"
