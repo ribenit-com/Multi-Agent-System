@@ -9,7 +9,7 @@ EXEC_SCRIPT="check_gitlab_names_json_UnitTest.sh"
 TARGET_SCRIPT="check_gitlab_names_json.sh"
 
 EXEC_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/test/scripts/gitlab/check_gitlab_names_json_UnitTest.sh"
-TARGET_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/scripts/01.gitlab安装包/check_gitlab_names_json.sh"
+TARGET_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/scripts/01gitlab/check_gitlab_names_json.sh"
 
 #########################################
 # 下载脚本（如果不存在）
