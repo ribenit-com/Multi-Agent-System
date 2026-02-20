@@ -1,18 +1,18 @@
 #!/bin/bash
 # ===================================================
-# GitLab HA 控制脚本（逐行执行可见 v1.4）
+# GitLab HA 控制脚本（前台执行可见 v1.5）
 # 日期：2026-02-21
 # 功能：
 #   - 强制下载最新 JSON / HTML 脚本
-#   - 执行 JSON 检测 + 实时日志
+#   - 执行 JSON 检测（前台 + 实时输出）
 #   - 轮询 JSON 输出（倒计时显示）
-#   - 每条命令都有说明
-#   - Pod/PVC/Namespace/Service 异常统计
+#   - 每条命令说明
+#   - 异常统计（Pod/PVC/Namespace/Service）
 #   - 生成 HTML 报告
 # ===================================================
 
 set -euo pipefail
-SCRIPT_VERSION="v1.4"
+SCRIPT_VERSION="v1.5"
 MODULE_NAME="${1:-GitLab_HA}"
 WORK_DIR=$(mktemp -d)
 JSON_LOG="$WORK_DIR/json.log"
@@ -51,11 +51,10 @@ run curl -sSL "$HTML_SCRIPT_URL" -o "$HTML_SCRIPT"
 run chmod +x "$HTML_SCRIPT"
 
 # -------------------------
-# 执行 JSON 脚本并实时输出
+# 执行 JSON 脚本（前台执行 + 实时输出）
 # -------------------------
 echo -e "\n🔹 执行 JSON 检测脚本..."
-run bash "$JSON_SCRIPT" > >(tee -a "$TMP_JSON") 2> >(tee -a "$JSON_LOG" >&2) &
-JSON_PID=$!
+run bash "$JSON_SCRIPT" > >(tee -a "$TMP_JSON") 2> >(tee -a "$JSON_LOG" >&2)
 
 # -------------------------
 # 轮询等待 JSON 文件生成
@@ -82,10 +81,6 @@ if [ ! -s "$TMP_JSON" ]; then
     cat "$JSON_LOG"
     exit 1
 fi
-
-wait $JSON_PID
-EXIT_CODE=$?
-[[ $EXIT_CODE -eq 0 ]] || { echo -e "\033[31m❌ JSON 脚本退出码: $EXIT_CODE\033[0m"; exit 1; }
 
 # -------------------------
 # JSON 格式检查
