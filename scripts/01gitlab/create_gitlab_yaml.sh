@@ -3,10 +3,14 @@
 # GitLab 内网生产环境 YAML 生成脚本（企业级标准化命名）
 # 功能：
 #   - 自动生成 Namespace、Secret、StatefulSet、Service、PVC、CronJob YAML
-#   - 遵循企业命名规则手册
+#   - 增加日志打印，便于单元测试追溯问题
 # ===================================================
 
 set -euo pipefail
+
+log() {
+  echo "[$(date '+%F %T')] $*"
+}
 
 # -----------------------------
 # 配置参数（可通过命令行覆盖）
@@ -21,24 +25,36 @@ DOMAIN="${7:-gitlab.enterprise.local}"
 NODE_IP="${8:-192.168.1.100}"               
 REGISTRY_PORT="${9:-35050}"                  
 SSH_PORT="${10:-30022}"                       
-HTTP_PORT="${11:-30080}"                      
+HTTP_PORT="${11:-30080}"                       
+
+log "🛠 模块: $MODULE"
+log "📁 工作目录: $WORK_DIR"
+log "🌐 Namespace: $NAMESPACE"
+log "💾 PVC 大小: $PVC_SIZE, 存储类: $STORAGE_CLASS"
+log "🐳 GitLab 镜像: $GITLAB_IMAGE"
+log "🌍 域名: $DOMAIN, 节点IP: $NODE_IP"
+log "🔌 端口: HTTP=$HTTP_PORT SSH=$SSH_PORT Registry=$REGISTRY_PORT"
 
 mkdir -p "$WORK_DIR"
+log "✅ 工作目录已创建或已存在"
 
 # -----------------------------
 # Namespace
 # -----------------------------
-cat <<EOF > "$WORK_DIR/${MODULE}_namespace.yaml"
+NS_FILE="$WORK_DIR/${MODULE}_namespace.yaml"
+cat <<EOF > "$NS_FILE"
 apiVersion: v1
 kind: Namespace
 metadata:
   name: $NAMESPACE
 EOF
+log "📦 Namespace YAML 生成: $NS_FILE"
 
 # -----------------------------
 # Secret
 # -----------------------------
-cat <<EOF > "$WORK_DIR/${MODULE}_secret.yaml"
+SECRET_FILE="$WORK_DIR/${MODULE}_secret.yaml"
+cat <<EOF > "$SECRET_FILE"
 apiVersion: v1
 kind: Secret
 metadata:
@@ -47,11 +63,13 @@ metadata:
 stringData:
   root-password: "ReplaceWithStrongRandomPassword123!"
 EOF
+log "📦 Secret YAML 生成: $SECRET_FILE"
 
 # -----------------------------
 # StatefulSet + PVC
 # -----------------------------
-cat <<EOF > "$WORK_DIR/${MODULE}_statefulset.yaml"
+STS_FILE="$WORK_DIR/${MODULE}_statefulset.yaml"
+cat <<EOF > "$STS_FILE"
 apiVersion: apps/v1
 kind: StatefulSet
 metadata:
@@ -125,11 +143,13 @@ spec:
       storageClassName: $STORAGE_CLASS
       volumeMode: Filesystem
 EOF
+log "📦 StatefulSet + PVC YAML 生成: $STS_FILE"
 
 # -----------------------------
 # Service
 # -----------------------------
-cat <<EOF > "$WORK_DIR/${MODULE}_service.yaml"
+SERVICE_FILE="$WORK_DIR/${MODULE}_service.yaml"
+cat <<EOF > "$SERVICE_FILE"
 apiVersion: v1
 kind: Service
 metadata:
@@ -153,11 +173,13 @@ spec:
     targetPort: 5050
     nodePort: $REGISTRY_PORT
 EOF
+log "📦 Service YAML 生成: $SERVICE_FILE"
 
 # -----------------------------
 # CronJob (Registry GC)
 # -----------------------------
-cat <<EOF > "$WORK_DIR/${MODULE}_cronjob.yaml"
+CRON_FILE="$WORK_DIR/${MODULE}_cronjob.yaml"
+cat <<EOF > "$CRON_FILE"
 apiVersion: batch/v1
 kind: CronJob
 metadata:
@@ -182,10 +204,15 @@ spec:
             persistentVolumeClaim:
               claimName: data
 EOF
+log "📦 CronJob YAML 生成: $CRON_FILE"
 
+# -----------------------------
+# 完成提示
+# -----------------------------
 echo "✅ GitLab YAML 已生成到 $WORK_DIR"
-echo "📦 Namespace: ${MODULE}_namespace.yaml"
-echo "📦 Secret: ${MODULE}_secret.yaml"
-echo "📦 StatefulSet + PVC: ${MODULE}_statefulset.yaml"
-echo "📦 Service: ${MODULE}_service.yaml"
-echo "📦 CronJob: ${MODULE}_cronjob.yaml"
+echo "📦 Namespace: $(basename $NS_FILE)"
+echo "📦 Secret: $(basename $SECRET_FILE)"
+echo "📦 StatefulSet + PVC: $(basename $STS_FILE)"
+echo "📦 Service: $(basename $SERVICE_FILE)"
+echo "📦 CronJob: $(basename $CRON_FILE)"
+log "🎉 YAML 生成完成"
