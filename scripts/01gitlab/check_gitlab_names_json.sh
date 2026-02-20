@@ -1,110 +1,107 @@
 #!/bin/bash
 set -euo pipefail
 
-#########################################
-# GitLab 控制脚本 v1.9
-# 功能：强制下载最新 JSON/HTML 检测脚本
-#       执行 JSON 检测
-#       打印详细异常
-#       生成 HTML 报告
-#########################################
+ENVIRONMENT="${1:-prod}"
+MODE="${2:-audit}"
 
-SCRIPT_VERSION="v1.9"
-MODULE_NAME="${1:-GitLab_HA}"
-WORK_DIR=$(mktemp -d)
-TMP_JSON="$WORK_DIR/tmp_json_output.json"
+# JSON 条目数组
+json_entries=()
 
-timestamp() { date "+%Y-%m-%d %H:%M:%S"; }
-
-echo "=============================="
-echo "🔹 执行 GitLab 控制脚本"
-echo "🔹 版本号: $SCRIPT_VERSION"
-echo "🔹 工作目录: $WORK_DIR"
-echo "=============================="
-
-#########################################
-# 强制下载脚本函数
-#########################################
-download_script() {
-    local url="$1"
-    local dest="$2"
-    echo "🔹 下载最新脚本: $url"
-    echo "🔹 执行: curl -sSL $url -o $dest"
-    curl -sSL "$url" -o "$dest"
-    chmod +x "$dest"
+#######################################
+# kubectl 抽象层
+#######################################
+kctl() {
+  kubectl "$@"
 }
 
-JSON_SCRIPT="$WORK_DIR/check_gitlab_names_json.sh"
-HTML_SCRIPT="$WORK_DIR/check_gitlab_names_html.sh"
+#######################################
+# 添加 JSON 条目
+#######################################
+add_entry() {
+  json_entries+=("$1")
+}
 
-download_script "https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/01gitlab/check_gitlab_names_json.sh" "$JSON_SCRIPT"
-download_script "https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/01gitlab/check_gitlab_names_html.sh" "$HTML_SCRIPT"
+#######################################
+# 检查 Namespace
+#######################################
+check_namespace() {
+  ns="ns-mid-storage-$ENVIRONMENT"
+  if kctl get ns "$ns" >/dev/null 2>&1; then
+    add_entry "{\"resource_type\":\"Namespace\",\"name\":\"$ns\",\"status\":\"存在\"}"
+  else
+    status=$([[ "$MODE" == "enforce" ]] && echo "警告" || echo "不存在")
+    add_entry "{\"resource_type\":\"Namespace\",\"name\":\"$ns\",\"status\":\"$status\"}"
+  fi
+}
 
-#########################################
-# 执行 JSON 脚本并轮询生成文件
-#########################################
-echo -e "\n🔹 执行 JSON 检测脚本..."
-bash "$JSON_SCRIPT" > "$TMP_JSON" 2> "$WORK_DIR/json_error.log" || echo "⚠️ JSON 脚本执行报错，检查 $WORK_DIR/json_error.log"
+#######################################
+# 检查 Service
+#######################################
+check_service() {
+  svc="gitlab"
+  if kctl -n "ns-mid-storage-$ENVIRONMENT" get svc "$svc" >/dev/null 2>&1; then
+    add_entry "{\"resource_type\":\"Service\",\"name\":\"$svc\",\"status\":\"存在\"}"
+  else
+    add_entry "{\"resource_type\":\"Service\",\"name\":\"$svc\",\"status\":\"不存在\"}"
+  fi
+}
 
-# 等待 JSON 文件生成（轮询）
-MAX_RETRIES=10
-COUNT=0
-while [ $COUNT -lt $MAX_RETRIES ]; do
-    if [ -s "$TMP_JSON" ]; then
-        echo "✅ JSON 文件生成成功: $TMP_JSON"
-        break
+#######################################
+# 检查 PVC
+#######################################
+check_pvc() {
+  pvc_list=$(kctl -n "ns-mid-storage-$ENVIRONMENT" get pvc -o name 2>/dev/null || true)
+  for pvc in $pvc_list; do
+    name=$(basename "$pvc")
+    if [[ "$name" =~ ^pvc-.*-[0-9]+$ ]]; then
+      status="命名规范"
+    else
+      status="命名不规范"
     fi
-    ((COUNT++))
-    echo "🔄 [$COUNT/$MAX_RETRIES] JSON 未生成，等待 3 秒..."
-    sleep 3
-done
+    add_entry "{\"resource_type\":\"PVC\",\"name\":\"$name\",\"status\":\"$status\"}"
+  done
+}
 
-if [ ! -s "$TMP_JSON" ]; then
-    echo "❌ 超时：JSON 文件未生成"
-    cat "$WORK_DIR/json_error.log"
-    exit 1
+#######################################
+# 检查 Pod
+#######################################
+check_pod() {
+  pod_list=$(kctl -n "ns-mid-storage-$ENVIRONMENT" get pods --no-headers 2>/dev/null || true)
+  while read -r line; do
+    [[ -z "$line" ]] && continue
+    name=$(echo "$line" | awk '{print $1}')
+    status=$(echo "$line" | awk '{print $3}')
+    add_entry "{\"resource_type\":\"Pod\",\"name\":\"$name\",\"status\":\"$status\"}"
+  done <<< "$pod_list"
+}
+
+#######################################
+# 输出 JSON
+#######################################
+main() {
+  check_namespace
+  check_service
+  check_pvc
+  check_pod
+
+  # 输出数组 JSON
+  echo "["
+  local first=true
+  for entry in "${json_entries[@]}"; do
+    if [ "$first" = true ]; then
+      first=false
+    else
+      echo ","
+    fi
+    echo -n "$entry"
+  done
+  echo
+  echo "]"
+}
+
+#######################################
+# 可执行入口
+#######################################
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
 fi
-
-#########################################
-# 检查 JSON 格式
-#########################################
-echo -e "\n🔹 检查 JSON 格式..."
-if jq empty "$TMP_JSON" 2>/dev/null; then
-    echo "✅ JSON 文件格式合法"
-else
-    echo "❌ JSON 文件格式错误"
-    cat "$TMP_JSON"
-    exit 1
-fi
-
-echo -e "\n🔹 JSON 文件预览（前5行）:"
-head -n 5 "$TMP_JSON"
-
-#########################################
-# 异常统计并打印详细内容
-#########################################
-echo -e "\n🔹 检查 Pod/PVC/Namespace/Service 异常..."
-POD_ENTRIES=$(jq '.[] | select(.resource_type=="Pod" and .status!="Running")' < "$TMP_JSON")
-PVC_ENTRIES=$(jq '.[] | select(.resource_type=="PVC" and .status!="命名规范")' < "$TMP_JSON")
-NS_ENTRIES=$(jq '.[] | select(.resource_type=="Namespace" and .status!="存在")' < "$TMP_JSON")
-SVC_ENTRIES=$(jq '.[] | select(.resource_type=="Service" and .status!="存在")' < "$TMP_JSON")
-
-[[ $(echo "$POD_ENTRIES" | jq -s 'length') -gt 0 ]] && echo -e "\033[31m⚠️ Pod异常:\033[0m" && echo "$POD_ENTRIES" | jq '.'
-[[ $(echo "$PVC_ENTRIES" | jq -s 'length') -gt 0 ]] && echo -e "\033[33m⚠️ PVC异常:\033[0m" && echo "$PVC_ENTRIES" | jq '.'
-[[ $(echo "$NS_ENTRIES" | jq -s 'length') -gt 0 ]] && echo -e "\033[31m⚠️ Namespace异常:\033[0m" && echo "$NS_ENTRIES" | jq '.'
-[[ $(echo "$SVC_ENTRIES" | jq -s 'length') -gt 0 ]] && echo -e "\033[31m⚠️ Service异常:\033[0m" && echo "$SVC_ENTRIES" | jq '.'
-
-#########################################
-# 生成 HTML 报告
-#########################################
-echo -e "\n🔹 生成 HTML 报告..."
-"$HTML_SCRIPT" "$MODULE_NAME" "$TMP_JSON"
-echo "✅ HTML 报告生成完成"
-
-#########################################
-# 清理临时文件
-#########################################
-echo -e "\n🔹 清理临时文件..."
-rm -rf "$WORK_DIR"
-
-echo -e "\n✅ GitLab 控制脚本执行完成: 模块=$MODULE_NAME, 版本=$SCRIPT_VERSION"
