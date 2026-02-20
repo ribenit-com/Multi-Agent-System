@@ -8,8 +8,8 @@ set -euo pipefail
 EXEC_SCRIPT="gitlab_yaml_gen_UnitTest.sh"
 TARGET_SCRIPT="gitlab_yaml_gen.sh"
 
-EXEC_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/test/scripts/gitlab/gitlab_yaml_gen_UnitTest.sh"
-TARGET_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/01gitlab/gitlab_yaml_gen.sh"
+EXEC_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/test/scripts/gitlab/create_gitlab_yaml_UnitTest.sh"
+TARGET_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/01gitlab/create_gitlab_yaml.sh"
 
 #########################################
 # 下载脚本（如果不存在）
