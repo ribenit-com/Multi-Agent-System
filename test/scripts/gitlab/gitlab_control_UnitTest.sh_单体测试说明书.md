@@ -35,7 +35,7 @@
 #### 1.1 下载 JSON 单体测试脚本
 
 ```bash
-curl -L "https://github.com/ribenit-com/Multi-Agent-System/blob/main/test/scripts/gitlab/gitlab_control_UnitTest.sh" \
+curl -L "https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/test/scripts/gitlab/gitlab_control_UnitTest.sh" \
   -o gitlab_control_UnitTest.sh
 chmod +x gitlab_control_UnitTest.sh
 ```
