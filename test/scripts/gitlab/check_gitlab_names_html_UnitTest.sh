@@ -1,17 +1,23 @@
 #!/bin/bash
+# ===================================================
+# check_gitlab_names_html_UnitTest.sh
+# 功能：check_gitlab_names_html.sh 单体测试
+# ===================================================
+
 set -e
 
 #########################################
 # 1️⃣ 自动下载被测试脚本
 #########################################
 
-TARGET_SCRIPT="check_gitlab_names_html.sh"
+MODULE="gitlab"
+TARGET_SCRIPT="check_${MODULE}_names_html.sh"
 
 if [ ! -f "$TARGET_SCRIPT" ]; then
   echo "⬇️ Downloading target script..."
 
   curl -L \
-  https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/PostgreSQL安装包/check_postgresql_names_html.sh \
+  https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/GitLab安装包/check_gitlab_names_html.sh \
   -o "$TARGET_SCRIPT"
 
   chmod +x "$TARGET_SCRIPT"
@@ -22,13 +28,13 @@ fi
 #########################################
 
 TEST_DIR="./ut_tmp"
-OUTPUT_DIR="/mnt/truenas/PostgreSQL安装报告书"
+OUTPUT_DIR="/mnt/truenas/GitLab安装报告书"
 
 rm -rf "$TEST_DIR"
 mkdir -p "$TEST_DIR"
 
 #########################################
-# 3️⃣ 极简断言
+# 3️⃣ 极简断言函数
 #########################################
 
 assert_equal() {
@@ -67,7 +73,7 @@ fi
 # 5️⃣ UT-02 未传入 JSON 文件
 #########################################
 
-if ./"$TARGET_SCRIPT" "PostgreSQL_HA" 2>/dev/null; then
+if ./"$TARGET_SCRIPT" "GitLab_HA" 2>/dev/null; then
   echo "❌ FAIL"
   exit 1
 else
@@ -78,7 +84,7 @@ fi
 # 6️⃣ UT-03 JSON 文件不存在
 #########################################
 
-if ./"$TARGET_SCRIPT" "PostgreSQL_HA" not_exist.json 2>/dev/null; then
+if ./"$TARGET_SCRIPT" "GitLab_HA" not_exist.json 2>/dev/null; then
   echo "❌ FAIL"
   exit 1
 else
@@ -93,11 +99,13 @@ rm -rf "$OUTPUT_DIR"
 
 cat <<EOF > "$TEST_DIR/test.json"
 {
+  "namespace": "ns-gitlab-ha",
+  "statefulset": "sts-gitlab-ha",
   "status": "ok"
 }
 EOF
 
-./"$TARGET_SCRIPT" "PostgreSQL_HA" "$TEST_DIR/test.json"
+./"$TARGET_SCRIPT" "GitLab_HA" "$TEST_DIR/test.json"
 
 if [[ -d "$OUTPUT_DIR" ]]; then
   echo "✅ PASS"
@@ -123,7 +131,7 @@ cat <<EOF > "$TEST_DIR/test_escape.json"
 }
 EOF
 
-./"$TARGET_SCRIPT" "PostgreSQL_HA" "$TEST_DIR/test_escape.json"
+./"$TARGET_SCRIPT" "GitLab_HA" "$TEST_DIR/test_escape.json"
 
 grep -q "&lt;error &amp; warning&gt;" "$OUTPUT_DIR/latest.html"
 assert_equal "0" "$?"
@@ -136,7 +144,7 @@ FIRST_LINK=$(readlink "$OUTPUT_DIR/latest.html")
 
 sleep 1
 
-./"$TARGET_SCRIPT" "PostgreSQL_HA" "$TEST_DIR/test.json"
+./"$TARGET_SCRIPT" "GitLab_HA" "$TEST_DIR/test.json"
 
 SECOND_LINK=$(readlink "$OUTPUT_DIR/latest.html")
 
@@ -151,7 +159,7 @@ fi
 # 1️⃣1️⃣ UT-08 成功输出信息
 #########################################
 
-OUTPUT=$(./"$TARGET_SCRIPT" "PostgreSQL_HA" "$TEST_DIR/test.json")
+OUTPUT=$(./"$TARGET_SCRIPT" "GitLab_HA" "$TEST_DIR/test.json")
 
 echo "$OUTPUT" | grep -q "HTML 报告生成完成"
 assert_equal "0" "$?"
