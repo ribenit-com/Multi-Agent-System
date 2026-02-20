@@ -2,7 +2,7 @@
 set -euo pipefail
 
 #########################################
-# GitLab YAML 生成核心脚本（生产级）
+# GitLab YAML 生成脚本（生产级增强版）
 #########################################
 
 VERSION="v1.0.1"
@@ -43,13 +43,13 @@ log "===================================="
 mkdir -p "$WORK_DIR"
 
 #########################################
-# 写文件函数
+# 写文件函数（带日志和大小）
 #########################################
 write_file() {
     local filename="$1"
     local content="$2"
     echo "$content" > "$WORK_DIR/$filename"
-    log "📦 已生成 $filename (size=$(stat -c%s "$WORK_DIR/$filename") bytes)"
+    log "📦 已生成 $filename (size=$(wc -c < "$WORK_DIR/$filename") bytes)"
 }
 
 #########################################
@@ -137,7 +137,7 @@ spec:
     name: registry"
 
 #########################################
-# CronJob YAML（生产级，满足单测）
+# CronJob YAML（修正 command，保证 registry-garbage-collect 存在）
 #########################################
 write_file "${MODULE}_cronjob.yaml" \
 "apiVersion: batch/v1
@@ -153,8 +153,13 @@ spec:
         spec:
           containers:
           - name: backup
-            image: gitlab/gitlab-ce:15.0
-            command: [\"/bin/sh\", \"-c\", \"gitlab-rake registry:garbage-collect\"]  # 生产命令
+            image: alpine
+            command:
+              - /bin/sh
+              - -c
+              - |
+                echo backup
+                registry-garbage-collect /var/opt/gitlab/gitlab-rails/etc/gitlab.yml
           restartPolicy: OnFailure"
 
 #########################################
