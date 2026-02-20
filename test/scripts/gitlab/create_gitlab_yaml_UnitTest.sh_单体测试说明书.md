@@ -1,48 +1,161 @@
-GitLab 内网边缘环境部署手册
-1. 架构定位
-本方案采用 GitLab Omnibus 单体容器 模式，通过 StatefulSet 保证数据一致性。专为内网 n8n 工作流同步及 KubeEdge 镜像下发设计。
+# GitLab YAML 生成脚本单体测试说明书（v1.0）
 
-2. 核心组件说明
-StatefulSet (sts-gitlab): 核心应用。集成 Git 仓库、镜像仓库、数据库。
+**模块**：GitLab 内网生产环境  
+**类型**：YAML 生成脚本  
+**性质**：功能型脚本，自动生成 Namespace、Secret、StatefulSet、Service、PVC、CronJob YAML，遵循企业级标准命名  
 
-资源限制: 锁定 4Gi-8Gi 内存，防止 OOM（内存溢出）导致边缘侧同步中断。
+---
 
-启动探测 (startupProbe): 预留 300 秒初始化宽限，解决 GitLab 启动慢导致的 Pod 重启死循环。
+# 一、单体测试观点表
 
-Service (svc-gitlab-nodeport):
+| 编号 | 函数/检测点 | 场景 | 期望 |
+|------|-------------|------|------|
+| UT-01 | 参数校验 | 未传入 MODULE | 输出 Usage 并 exit 1 |
+| UT-02 | 参数校验 | 未传入 WORK_DIR | 使用默认 \$HOME/gitlab_scripts 并创建目录 |
+| UT-03 | 目录创建 | WORK_DIR 不存在 | 自动创建 WORK_DIR |
+| UT-04 | Namespace YAML | 正常执行 | 生成 `${MODULE}_namespace.yaml` 文件，内容正确 |
+| UT-05 | Secret YAML | 正常执行 | 生成 `${MODULE}_secret.yaml` 文件，含 root-password |
+| UT-06 | StatefulSet YAML | 正常执行 | 生成 `${MODULE}_statefulset.yaml`，含 volumeClaimTemplates 与环境变量配置 |
+| UT-07 | Service YAML | 正常执行 | 生成 `${MODULE}_service.yaml`，端口与 NodePort 对应 |
+| UT-08 | CronJob YAML | 正常执行 | 生成 `${MODULE}_cronjob.yaml`，含 registry GC 命令和 PVC volume |
+| UT-09 | YAML 内容验证 | 所有 YAML | 文件内容格式正确，可被 `kubectl apply -f` 接受 |
+| UT-10 | 输出提示 | 脚本执行完成 | 控制台输出生成文件路径与名称 |
 
-30080: Web 界面。
+---
 
-30022: SSH 端口（n8n 同步代码）。
+# 二、测试执行说明
 
-35050: 镜像仓库（KubeEdge 边缘节点拉取镜像）。
+## 1️⃣ 准备测试环境
 
-CronJob (gitlab-gc-worker):
+1. 下载或准备测试脚本：
 
-物理清理: 每周日凌晨执行，强制回收磁盘空间。这是防止磁盘爆满的核心保险。
+```bash
+curl -L \
+  https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/test/scripts/gitlab/gitlab_yaml_gen_UnitTest.sh \
+  -o gitlab_yaml_gen_UnitTest.sh
 
-3. 关键配置重点（稳定性）
-Registry 优化: 开启逻辑清理策略，允许在 UI 界面设置标签保留规则。
+赋予执行权限：
 
-性能裁剪: 限制 puma 进程数为 2，降低空闲内存占用。
+chmod +x gitlab_yaml_gen_UnitTest.sh
 
-边缘适配: 镜像仓库直接绑定 NodePort，规避 Ingress 代理大文件时的超时和容量限制。
+确认测试目录不存在，或手动清理旧文件：
 
-4. 运维注意事项
-磁盘预警: GitLab 数据目录（/var/opt/gitlab）包含数据库、Git 仓库和 Docker 镜像。当占用率超过 80% 时，需手动触发 CronJob。
+rm -rf $HOME/gitlab_scripts/*
+2️⃣ 执行测试
+./gitlab_yaml_gen_UnitTest.sh
 
-不安全仓库: 边缘节点拉取镜像前，必须在本地 Docker 配置 insecure-registries。
+或者传入自定义参数：
 
-持久化: 不要删除 PVC。如果更换节点，K8s 会通过 StatefulSet 自动重新挂载。
+./gitlab_yaml_gen_UnitTest.sh GitLab_Test /tmp/gitlab_test ns-test-gitlab sc-fast 50Gi gitlab/gitlab-ce:15.0 gitlab.test.local 192.168.50.10 35050 30022 30080
+3️⃣ 期望控制台输出
+✅ GitLab YAML 已生成到 /tmp/gitlab_test
+📦 Namespace: GitLab_Test_namespace.yaml
+📦 Secret: GitLab_Test_secret.yaml
+📦 StatefulSet + PVC: GitLab_Test_statefulset.yaml
+📦 Service: GitLab_Test_service.yaml
+📦 CronJob: GitLab_Test_cronjob.yaml
+4️⃣ 验证 YAML 文件生成
+ls -l /tmp/gitlab_test/
 
-5. 部署命令
-Bash
-# 1. 部署全家桶
-kubectl apply -f gitlab-pro.yaml
+期望看到：
 
-# 2. 查看启动进度 (GitLab 首次启动约需 3-5 分钟)
-kubectl logs -f sts-gitlab-0 -n ns-gitlab
+GitLab_Test_namespace.yaml
+GitLab_Test_secret.yaml
+GitLab_Test_statefulset.yaml
+GitLab_Test_service.yaml
+GitLab_Test_cronjob.yaml
+5️⃣ 验证 YAML 内容
 
-# 3. 获取初始 root 密码
-# 如果 Secret 没生效，可执行：
-kubectl exec -it sts-gitlab-0 -n ns-gitlab -- grep 'Password:' /etc/gitlab/initial_root_password
+示例命令：
+
+cat /tmp/gitlab_test/GitLab_Test_namespace.yaml
+
+应包含：
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ns-test-gitlab
+
+StatefulSet 文件示例验证：
+
+grep -A3 "containers:" /tmp/gitlab_test/GitLab_Test_statefulset.yaml
+
+应包含 GitLab 镜像、环境变量及 volumeMounts 配置。
+
+Service 文件端口验证：
+
+grep "nodePort" /tmp/gitlab_test/GitLab_Test_service.yaml
+
+应包含：
+
+nodePort: 30080
+nodePort: 30022
+nodePort: 35050
+
+CronJob 文件验证：
+
+grep "command" /tmp/gitlab_test/GitLab_Test_cronjob.yaml
+
+应包含：
+
+command: ["/bin/sh", "-c", "gitlab-ctl registry-garbage-collect -m"]
+三、测试逻辑说明
+
+函数行为
+
+脚本按模块功能生成对应 YAML
+
+Namespace、Secret、StatefulSet、Service、CronJob 都独立生成
+
+确保 PVC 与存储类配置正确
+
+内部状态验证
+
+UT-01 ~ UT-03：验证参数与目录创建逻辑
+
+UT-04 ~ UT-09：验证 YAML 文件生成及内容正确性
+
+UT-10：验证控制台输出
+
+断言工具
+
+assert_file_exists 验证 YAML 文件生成
+
+assert_file_contains 验证 YAML 内容
+
+assert_equal 验证控制台输出信息
+
+四、返回值说明
+exit 0    # 执行成功，所有 YAML 文件生成完毕
+exit 1    # 参数错误或生成失败
+五、异常场景说明
+场景	返回行为
+未传 MODULE	输出 Usage 并 exit 1
+WORK_DIR 无法创建	bash 报错退出
+PVC_SIZE/StorageClass 格式错误	YAML 文件生成失败
+NodePort 超出范围	YAML 文件生成但 kubectl apply 可能报错
+镜像不存在	YAML 生成正常，但容器拉取失败
+六、企业级扩展建议（可选）
+
+增加 YAML 文件 Schema 校验 (kubectl apply --dry-run=client)
+
+支持多副本配置与资源自动伸缩
+
+增加多环境支持（dev / staging / prod）
+
+支持外部 Secret 管理（Vault / K8s Secret）
+
+自动生成 README 或部署文档
+
+可集成 CI/CD 流水线，自动生成 YAML 并应用
+
+七、结论
+
+GitLab YAML 生成脚本属于企业级功能模块
+
+可自动生成完整 Namespace、Secret、StatefulSet、Service、PVC、CronJob YAML
+
+测试覆盖参数校验、文件生成、内容正确性、控制台输出
+
+支持 CI/CD 集成和企业标准化命名规范
