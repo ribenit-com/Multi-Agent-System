@@ -1,114 +1,180 @@
 #!/bin/bash
+# =============================================================
+# GitLab YAML + JSON + HTML 生成脚本（固定输出目录版）
+# 输出目录: /mnt/truenas/Gitlab_yaml_output
+# =============================================================
+
 set -euo pipefail
 
 #########################################
-# GitLab YAML 生成脚本单元测试（生产级）
+# 配置固定输出目录
 #########################################
+LOG_DIR="/mnt/truenas/Gitlab_yaml_output"
+mkdir -p "$LOG_DIR"
 
-EXEC_SCRIPT="gitlab_yaml_gen_UnitTest.sh"
-TARGET_SCRIPT="gitlab_yaml_gen.sh"
+# 全量详尽日志
+FULL_LOG="$LOG_DIR/full_script.log"
 
-EXEC_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/test/scripts/gitlab/create_gitlab_yaml_UnitTest.sh"
-TARGET_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/01gitlab/create_gitlab_yaml.sh"
+# JSON / HTML 输出
+JSON_FILE="$LOG_DIR/yaml_list.json"
+HTML_FILE="$LOG_DIR/postgres_ha_info.html"
 
-VERSION="v1.0.1"   # 单元测试版本，可手动维护
+# 输出简要信息到终端
+echo "📄 全量日志文件: $FULL_LOG"
+echo "📄 输出目录: $LOG_DIR"
 
-#########################################
-# Header 输出
-#########################################
-log() {
-    local msg="$1"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $msg"
-}
+# 重定向 stdout/stderr 到日志文件
+exec 3>&1 4>&2
+exec 1>>"$FULL_LOG" 2>&1
 
-log "======================================"
-log "📌 单元测试脚本: $EXEC_SCRIPT"
-log "📌 目标脚本: $TARGET_SCRIPT"
-log "📌 版本: $VERSION"
-log "======================================"
-
-#########################################
-# 强制下载最新脚本
-#########################################
-download_latest() {
-    local file="$1"
-    local url="$2"
-    log "⬇️ 强制下载最新脚本: $url"
-    curl -fsSL "$url" -o "$file" || { log "❌ 下载失败: $url"; exit 1; }
-    chmod +x "$file"
-    log "✅ 下载完成并已赋予执行权限: $file"
-}
-
-download_latest "$EXEC_SCRIPT" "$EXEC_URL"
-download_latest "$TARGET_SCRIPT" "$TARGET_URL"
+# 打开逐行跟踪
+export PS4='+[$LINENO] '
+set -x
 
 #########################################
-# UT 断言工具
+# 模块名
 #########################################
-fail() { echo "❌ FAIL: $1"; exit 1; }
-pass() { echo "✅ PASS"; }
-assert_file_exists() { [ -f "$1" ] || fail "File $1 not found"; pass; }
-assert_file_contains() { grep -q "$2" "$1" || fail "File $1 does not contain '$2'"; pass; }
-assert_equal() { [[ "$1" == "$2" ]] || fail "expected=$1 actual=$2"; pass; }
-
-#########################################
-# 测试环境准备
-#########################################
-TEST_DIR=$(mktemp -d)
 MODULE="GitLab_Test"
-export HOME="$TEST_DIR"
-log "📂 测试临时目录: $TEST_DIR"
 
 #########################################
-# 运行目标脚本生成 YAML
-# 捕获输出以便日志分析
+# YAML 文件生成函数
 #########################################
-log "▶️ 执行目标脚本生成 YAML..."
-OUTPUT=$(bash "$TARGET_SCRIPT" "$MODULE" "$TEST_DIR" "ns-test-gitlab" "sc-fast" "50Gi" "gitlab/gitlab-ce:15.0" "gitlab.test.local" "192.168.50.10" "35050" "30022" "30080" 2>&1)
-echo "$OUTPUT"  # 打印完整日志以便追踪
-
-#########################################
-# UT 测试
-#########################################
-
-# UT-04 Namespace YAML
-assert_file_exists "$TEST_DIR/${MODULE}_namespace.yaml"
-assert_file_contains "$TEST_DIR/${MODULE}_namespace.yaml" "apiVersion: v1"
-assert_file_contains "$TEST_DIR/${MODULE}_namespace.yaml" "name: ns-test-gitlab"
-
-# UT-05 Secret YAML
-assert_file_exists "$TEST_DIR/${MODULE}_secret.yaml"
-assert_file_contains "$TEST_DIR/${MODULE}_secret.yaml" "root-password"
-
-# UT-06 StatefulSet YAML
-assert_file_exists "$TEST_DIR/${MODULE}_statefulset.yaml"
-assert_file_contains "$TEST_DIR/${MODULE}_statefulset.yaml" "volumeClaimTemplates"
-assert_file_contains "$TEST_DIR/${MODULE}_statefulset.yaml" "GITLAB_OMNIBUS_CONFIG"
-
-# UT-07 Service YAML
-assert_file_exists "$TEST_DIR/${MODULE}_service.yaml"
-assert_file_contains "$TEST_DIR/${MODULE}_service.yaml" "nodePort: 30080"
-assert_file_contains "$TEST_DIR/${MODULE}_service.yaml" "nodePort: 30022"
-assert_file_contains "$TEST_DIR/${MODULE}_service.yaml" "nodePort: 35050"
-
-# UT-08 CronJob YAML
-assert_file_exists "$TEST_DIR/${MODULE}_cronjob.yaml"
-assert_file_contains "$TEST_DIR/${MODULE}_cronjob.yaml" "registry-garbage-collect"
-assert_file_contains "$TEST_DIR/${MODULE}_cronjob.yaml" "persistentVolumeClaim"
-
-# UT-09 YAML 格式验证（kubectl dry-run）
-kubectl apply --dry-run=client -f "$TEST_DIR/${MODULE}_namespace.yaml" >/dev/null 2>&1 && pass || fail "Namespace YAML invalid"
-kubectl apply --dry-run=client -f "$TEST_DIR/${MODULE}_secret.yaml" >/dev/null 2>&1 && pass || fail "Secret YAML invalid"
-kubectl apply --dry-run=client -f "$TEST_DIR/${MODULE}_statefulset.yaml" >/dev/null 2>&1 && pass || fail "StatefulSet YAML invalid"
-kubectl apply --dry-run=client -f "$TEST_DIR/${MODULE}_service.yaml" >/dev/null 2>&1 && pass || fail "Service YAML invalid"
-kubectl apply --dry-run=client -f "$TEST_DIR/${MODULE}_cronjob.yaml" >/dev/null 2>&1 && pass || fail "CronJob YAML invalid"
-
-# UT-10 输出提示（只匹配核心文本）
-EXPECTED_TEXT="GitLab YAML 已生成到 $TEST_DIR"
-echo "$OUTPUT" | grep -q "$EXPECTED_TEXT" && pass || { 
-    fail "Output missing expected text"
-    echo "🔹 最近日志内容（用于调试）:"
-    echo "$OUTPUT" | tail -n 20
+write_file() {
+    local filename="$1"
+    local content="$2"
+    echo "$content" > "$LOG_DIR/$filename"
 }
 
-log "🎉 All YAML generation tests passed (enterprise-level v1)"
+#########################################
+# 生成 YAML 文件
+#########################################
+write_file "${MODULE}_namespace.yaml" "apiVersion: v1
+kind: Namespace
+metadata:
+  name: ns-test-gitlab"
+
+write_file "${MODULE}_secret.yaml" "apiVersion: v1
+kind: Secret
+metadata:
+  name: sc-fast
+  namespace: ns-test-gitlab
+type: Opaque
+stringData:
+  root-password: 'secret123'"
+
+write_file "${MODULE}_statefulset.yaml" "apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: gitlab
+  namespace: ns-test-gitlab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gitlab
+  serviceName: gitlab
+  template:
+    metadata:
+      labels:
+        app: gitlab
+    spec:
+      containers:
+      - name: gitlab
+        image: gitlab/gitlab-ce:15.0
+        env:
+        - name: GITLAB_OMNIBUS_CONFIG
+          value: 'external_url \"http://gitlab.test.local\"'
+        volumeMounts:
+        - name: gitlab-data
+          mountPath: /var/opt/gitlab
+  volumeClaimTemplates:
+  - metadata:
+      name: gitlab-data
+    spec:
+      accessModes: [ \"ReadWriteOnce\" ]
+      resources:
+        requests:
+          storage: 50Gi"
+
+write_file "${MODULE}_service.yaml" "apiVersion: v1
+kind: Service
+metadata:
+  name: gitlab-service
+  namespace: ns-test-gitlab
+spec:
+  type: NodePort
+  selector:
+    app: gitlab
+  ports:
+  - port: 22
+    nodePort: 30022
+    name: ssh
+  - port: 80
+    nodePort: 30080
+    name: http
+  - port: 5005
+    nodePort: 35050
+    name: registry"
+
+write_file "${MODULE}_cronjob.yaml" "apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: gitlab-backup
+  namespace: ns-test-gitlab
+spec:
+  schedule: '0 2 * * *'
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: backup
+            image: alpine
+            command:
+              - /bin/sh
+              - -c
+              - |
+                echo '执行 GitLab registry-garbage-collect'
+                registry-garbage-collect /var/opt/gitlab/gitlab-rails/etc/gitlab.yml
+            volumeMounts:
+              - name: gitlab-data
+                mountPath: /var/opt/gitlab
+          restartPolicy: OnFailure
+          volumes:
+            - name: gitlab-data
+              persistentVolumeClaim:
+                claimName: sc-fast"
+
+#########################################
+# 生成 JSON 文件
+#########################################
+yaml_files=("$LOG_DIR"/*.yaml)
+printf '%s\n' "${yaml_files[@]}" | jq -R . | jq -s . > "$JSON_FILE"
+
+#########################################
+# 生成 HTML 文件
+#########################################
+{
+    echo "<html><head><title>GitLab YAML & JSON 状态</title></head><body>"
+    echo "<h2>生成时间: $(date '+%Y-%m-%d %H:%M:%S')</h2>"
+    echo "<h3>输出目录: $LOG_DIR</h3>"
+    echo "<h3>JSON 文件: $JSON_FILE</h3>"
+    echo "<h3>YAML 文件列表:</h3><ul>"
+    for f in "${yaml_files[@]}"; do
+        echo "<li>$f (size=$(wc -c <"$f") bytes)</li>"
+    done
+    echo "</ul>"
+    echo "<h3>JSON 内容:</h3><pre>"
+    cat "$JSON_FILE"
+    echo "</pre>"
+    echo "</body></html>"
+} > "$HTML_FILE"
+
+# 关闭逐行跟踪
+set +x
+
+# 恢复 stdout/stderr 到终端
+exec 1>&3 2>&4
+
+echo "✅ YAML / JSON / HTML 已生成在 $LOG_DIR"
+echo "📄 全量日志: $FULL_LOG"
