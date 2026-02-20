@@ -2,7 +2,7 @@
 set -euo pipefail
 
 #########################################
-# GitLab YAML 生成脚本单元测试
+# GitLab YAML 生成脚本单元测试（增强版）
 #########################################
 
 EXEC_SCRIPT="gitlab_yaml_gen_UnitTest.sh"
@@ -11,27 +11,40 @@ TARGET_SCRIPT="gitlab_yaml_gen.sh"
 EXEC_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/test/scripts/gitlab/create_gitlab_yaml_UnitTest.sh"
 TARGET_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/01gitlab/create_gitlab_yaml.sh"
 
-#########################################
-# 下载脚本（如果不存在）
-#########################################
+VERSION="v1.0.0"   # 可以手动维护，或从远程脚本解析
 
-download_if_missing() {
-  local file="$1"
-  local url="$2"
-  if [ ! -f "$file" ]; then
-    echo "⬇️ Downloading $file ..."
-    curl -f -L "$url" -o "$file"
-    chmod +x "$file"
-  fi
+#########################################
+# Header 输出
+#########################################
+log() {
+    local msg="$1"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $msg"
 }
 
-download_if_missing "$EXEC_SCRIPT" "$EXEC_URL"
-download_if_missing "$TARGET_SCRIPT" "$TARGET_URL"
+log "======================================"
+log "📌 单元测试脚本: $EXEC_SCRIPT"
+log "📌 目标脚本: $TARGET_SCRIPT"
+log "📌 版本: $VERSION"
+log "======================================"
+
+#########################################
+# 强制下载最新脚本
+#########################################
+download_latest() {
+    local file="$1"
+    local url="$2"
+    log "⬇️ 强制下载最新脚本: $url"
+    curl -fsSL "$url" -o "$file" || { log "❌ 下载失败: $url"; exit 1; }
+    chmod +x "$file"
+    log "✅ 下载完成并已赋予执行权限: $file"
+}
+
+download_latest "$EXEC_SCRIPT" "$EXEC_URL"
+download_latest "$TARGET_SCRIPT" "$TARGET_URL"
 
 #########################################
 # UT 断言工具
 #########################################
-
 fail() { echo "❌ FAIL: $1"; exit 1; }
 pass() { echo "✅ PASS"; }
 assert_file_exists() { [ -f "$1" ] || fail "File $1 not found"; pass; }
@@ -41,16 +54,15 @@ assert_equal() { [[ "$1" == "$2" ]] || fail "expected=$1 actual=$2"; pass; }
 #########################################
 # 测试环境准备
 #########################################
-
 TEST_DIR=$(mktemp -d)
 MODULE="GitLab_Test"
-
 export HOME="$TEST_DIR"
+log "📂 测试临时目录: $TEST_DIR"
 
 #########################################
 # 运行目标脚本生成 YAML
 #########################################
-
+log "▶️ 执行目标脚本生成 YAML..."
 bash "$TARGET_SCRIPT" "$MODULE" "$TEST_DIR" "ns-test-gitlab" "sc-fast" "50Gi" "gitlab/gitlab-ce:15.0" "gitlab.test.local" "192.168.50.10" "35050" "30022" "30080"
 
 #########################################
@@ -93,4 +105,4 @@ kubectl apply --dry-run=client -f "$TEST_DIR/${MODULE}_cronjob.yaml" >/dev/null 
 EXPECTED_OUTPUT="✅ GitLab YAML 已生成到 $TEST_DIR"
 bash "$TARGET_SCRIPT" "$MODULE" "$TEST_DIR" | grep -q "$EXPECTED_OUTPUT" && pass || fail "Output missing expected text"
 
-echo "🎉 All YAML generation tests passed (enterprise-level v1)"
+log "🎉 All YAML generation tests passed (enterprise-level v1)"
