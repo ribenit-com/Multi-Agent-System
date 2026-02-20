@@ -1,18 +1,17 @@
 #!/bin/bash
 # ===================================================
-# GitLab HA 控制脚本（前台执行可见 v1.6）
+# GitLab HA 控制脚本（前台执行可见 v1.7）
 # 日期：2026-02-21
 # 功能：
 #   - 强制下载最新 JSON / HTML 脚本
-#   - 执行 JSON 检测（前台 + 实时输出，不再卡住）
+#   - 执行 JSON 检测（stdout 直接写文件 + stderr 实时输出）
 #   - 轮询 JSON 输出（倒计时显示）
-#   - 每条命令说明
 #   - 异常统计（Pod/PVC/Namespace/Service）
 #   - 生成 HTML 报告
 # ===================================================
 
 set -euo pipefail
-SCRIPT_VERSION="v1.6"
+SCRIPT_VERSION="v1.7"
 MODULE_NAME="${1:-GitLab_HA}"
 WORK_DIR=$(mktemp -d)
 JSON_LOG="$WORK_DIR/json.log"
@@ -51,18 +50,17 @@ run curl -sSL "$HTML_SCRIPT_URL" -o "$HTML_SCRIPT"
 run chmod +x "$HTML_SCRIPT"
 
 # -------------------------
-# 执行 JSON 脚本（前台执行 + 实时输出，不再卡住）
+# 执行 JSON 脚本（stdout 直接写 TMP_JSON, stderr 写日志 + 终端）
 # -------------------------
 echo -e "\n🔹 执行 JSON 检测脚本..."
-# stdout 写 TMP_JSON + 终端，stderr 写 JSON_LOG + 终端
-run bash "$JSON_SCRIPT" | tee -a "$TMP_JSON" 2> >(tee -a "$JSON_LOG" >&2)
+bash "$JSON_SCRIPT" > "$TMP_JSON" 2> >(tee -a "$JSON_LOG" >&2)
+echo -e "✅ JSON 脚本执行完成"
 
 # -------------------------
 # 轮询等待 JSON 文件生成
 # -------------------------
 MAX_RETRIES=10
 COUNT=0
-
 while [ $COUNT -lt $MAX_RETRIES ]; do
     if [ -s "$TMP_JSON" ]; then
         echo -e "\n✅ JSON 文件生成成功: $TMP_JSON"
