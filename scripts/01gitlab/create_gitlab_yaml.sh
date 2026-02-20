@@ -2,7 +2,7 @@
 set -euo pipefail
 
 #########################################
-# GitLab YAML 生成核心脚本（增强 Header 版本）
+# GitLab YAML 生成核心脚本（增强版）
 #########################################
 
 VERSION="v1.0.0"
@@ -10,13 +10,16 @@ MODIFIED="2026-02-21"
 AUTHOR="zdl@cmaster01"
 SCRIPT_NAME="create_gitlab_yaml.sh"
 
+#########################################
+# 日志函数
+#########################################
 log() {
     local msg="$1"
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $msg"
 }
 
 #########################################
-# 打印详尽 Header
+# Header 输出
 #########################################
 log "==================================================="
 log "📌 脚本名称: $SCRIPT_NAME"
@@ -30,7 +33,9 @@ log "📌 PATH: $PATH"
 log "📌 Shell: $SHELL"
 log "==================================================="
 
+#########################################
 # 读取参数
+#########################################
 MODULE="${1:-GitLab_Test}"            
 WORK_DIR="${2:-$(mktemp -d)}"         
 NAMESPACE="${3:-ns-test-gitlab}"      
@@ -45,6 +50,9 @@ NODEPORT_HTTP="${11:-30080}"
 
 log "▶️ 接收参数: $*"
 
+#########################################
+# 输出目录检查
+#########################################
 mkdir -p "$WORK_DIR"
 if [ ! -d "$WORK_DIR" ]; then
     log "❌ 输出目录创建失败: $WORK_DIR"
@@ -52,3 +60,127 @@ if [ ! -d "$WORK_DIR" ]; then
 fi
 log "📂 输出目录: $WORK_DIR"
 log "📌 当前目录文件列表: $(ls -lh "$WORK_DIR" || echo '目录为空')"
+
+#########################################
+# 写文件函数（带追踪日志）
+#########################################
+write_file() {
+    local filename="$1"
+    local content="$2"
+    local filepath="$WORK_DIR/$filename"
+
+    log "▶️ 尝试写入文件: $filepath"
+    echo "$content" > "$filepath" || { log "❌ 写入失败: $filepath"; exit 1; }
+    
+    if [ -f "$filepath" ]; then
+        log "✅ 已生成 $filename (size=$(stat -c%s "$filepath") bytes)"
+    else
+        log "❌ 文件生成失败: $filepath"
+        exit 1
+    fi
+}
+
+#########################################
+# 生成 YAML 文件
+#########################################
+
+log "▶️ 开始生成 Namespace YAML..."
+write_file "${MODULE}_namespace.yaml" \
+"apiVersion: v1
+kind: Namespace
+metadata:
+  name: $NAMESPACE"
+
+log "▶️ 开始生成 Secret YAML..."
+write_file "${MODULE}_secret.yaml" \
+"apiVersion: v1
+kind: Secret
+metadata:
+  name: $SECRET
+  namespace: $NAMESPACE
+type: Opaque
+stringData:
+  root-password: \"secret123\""
+
+log "▶️ 开始生成 StatefulSet + PVC YAML..."
+write_file "${MODULE}_statefulset.yaml" \
+"apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: gitlab
+  namespace: $NAMESPACE
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gitlab
+  serviceName: gitlab
+  template:
+    metadata:
+      labels:
+        app: gitlab
+    spec:
+      containers:
+      - name: gitlab
+        image: $IMAGE
+        env:
+        - name: GITLAB_OMNIBUS_CONFIG
+          value: 'external_url \"http://$DOMAIN\"'
+        volumeMounts:
+        - name: gitlab-data
+          mountPath: /var/opt/gitlab
+  volumeClaimTemplates:
+  - metadata:
+      name: gitlab-data
+    spec:
+      accessModes: [ \"ReadWriteOnce\" ]
+      resources:
+        requests:
+          storage: $PVC_SIZE"
+
+log "▶️ 开始生成 Service YAML..."
+write_file "${MODULE}_service.yaml" \
+"apiVersion: v1
+kind: Service
+metadata:
+  name: gitlab-service
+  namespace: $NAMESPACE
+spec:
+  type: NodePort
+  selector:
+    app: gitlab
+  ports:
+  - port: 22
+    nodePort: $NODEPORT_SSH
+    name: ssh
+  - port: 80
+    nodePort: $NODEPORT_HTTP
+    name: http
+  - port: 5005
+    nodePort: $NODEPORT_REGISTRY
+    name: registry"
+
+log "▶️ 开始生成 CronJob YAML..."
+write_file "${MODULE}_cronjob.yaml" \
+"apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: gitlab-backup
+  namespace: $NAMESPACE
+spec:
+  schedule: \"0 2 * * *\"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: backup
+            image: alpine
+            command: [\"/bin/sh\", \"-c\", \"echo backup\"]
+          restartPolicy: OnFailure"
+
+#########################################
+# 完成提示
+#########################################
+log "✅ GitLab YAML 已生成到 $WORK_DIR"
+log "📌 输出目录最终文件列表: $(ls -lh "$WORK_DIR")"
