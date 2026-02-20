@@ -29,7 +29,7 @@
 
 ```bash
 curl -L \
-  https://github.com/ribenit-com/Multi-Agent-System/blob/main/test/scripts/gitlab/check_gitlab_names_json_UnitTest.sh \
+  https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/test/scripts/gitlab/check_gitlab_names_json_UnitTest.sh \
   -o check_gitlab_names_json_UnitTest.sh
 ```
 
