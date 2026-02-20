@@ -1,4 +1,4 @@
-# gitlab_ha_full_deploy.sh 验证逻辑说明书
+# check_gitlab_names_json.sh 验证逻辑说明书
 版本: v1.0
 用途: GitLab HA 部署前后合规验证逻辑说明
 
@@ -6,7 +6,7 @@
 
 # 1. 脚本定位
 
-gitlab_ha_full_deploy.sh 是用于 GitLab HA 架构部署过程中的合规验证模块。
+check_gitlab_names_json.sh 是用于 GitLab HA 架构部署过程中的合规验证模块。
 
 本脚本不负责业务逻辑。
 本脚本专注于：
@@ -237,7 +237,7 @@ category
 
 # 10. 验证执行时机
 
-HeliosGuard 验证在以下阶段执行：
+check_gitlab_names_json.sh 验证在以下阶段执行：
 
 1. GitLab HA 部署前预检
 2. GitLab HA 部署后验收
@@ -248,7 +248,7 @@ HeliosGuard 验证在以下阶段执行：
 
 # 11. 核心原则
 
-HeliosGuard 的验证逻辑遵循：
+check_gitlab_names_json.sh 的验证逻辑遵循：
 
 - 命名标准化优先
 - 资源完整性优先
@@ -259,7 +259,7 @@ HeliosGuard 的验证逻辑遵循：
 
 # 12. 结论
 
-gitlab_ha_full_deploy.sh 是 gitlab_ha_full_deploy.sh 的验证核心模块。
+check_gitlab_names_json.sh 是 gitlab_ha_full_deploy.sh 的验证核心模块。
 
 其职责仅限于：
 
