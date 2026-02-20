@@ -4,94 +4,103 @@ set -euo pipefail
 ENVIRONMENT="${1:-prod}"
 MODE="${2:-audit}"
 
+# JSON 条目数组
 json_entries=()
 
 #######################################
-# kubectl 抽象层（可被单测替换）
+# kubectl 抽象层
 #######################################
 kctl() {
   kubectl "$@"
 }
 
 #######################################
-# 工具函数
+# 添加 JSON 条目
 #######################################
 add_entry() {
   json_entries+=("$1")
 }
 
 #######################################
-# 检查函数
+# 检查 Namespace
 #######################################
-
 check_namespace() {
-  if ! kctl get ns "ns-mid-storage-$ENVIRONMENT" >/dev/null 2>&1; then
-    if [[ "$MODE" == "enforce" ]]; then
-      add_entry "warning"
-    else
-      add_entry "error"
-    fi
+  ns="ns-mid-storage-$ENVIRONMENT"
+  if kctl get ns "$ns" >/dev/null 2>&1; then
+    add_entry "{\"resource_type\":\"Namespace\",\"name\":\"$ns\",\"status\":\"存在\"}"
+  else
+    status=$([[ "$MODE" == "enforce" ]] && echo "警告" || echo "不存在")
+    add_entry "{\"resource_type\":\"Namespace\",\"name\":\"$ns\",\"status\":\"$status\"}"
   fi
 }
 
+#######################################
+# 检查 Service
+#######################################
 check_service() {
-  if ! kctl -n "ns-mid-storage-$ENVIRONMENT" get svc gitlab >/dev/null 2>&1; then
-    add_entry "error"
+  svc="gitlab"
+  if kctl -n "ns-mid-storage-$ENVIRONMENT" get svc "$svc" >/dev/null 2>&1; then
+    add_entry "{\"resource_type\":\"Service\",\"name\":\"$svc\",\"status\":\"存在\"}"
+  else
+    add_entry "{\"resource_type\":\"Service\",\"name\":\"$svc\",\"status\":\"不存在\"}"
   fi
 }
 
+#######################################
+# 检查 PVC
+#######################################
 check_pvc() {
   pvc_list=$(kctl -n "ns-mid-storage-$ENVIRONMENT" get pvc -o name 2>/dev/null || true)
-
   for pvc in $pvc_list; do
     name=$(basename "$pvc")
-    if [[ ! "$name" =~ ^pvc-.*-[0-9]+$ ]]; then
-      add_entry "warning"
+    if [[ "$name" =~ ^pvc-.*-[0-9]+$ ]]; then
+      status="命名规范"
+    else
+      status="命名不规范"
     fi
+    add_entry "{\"resource_type\":\"PVC\",\"name\":\"$name\",\"status\":\"$status\"}"
   done
 }
 
+#######################################
+# 检查 Pod
+#######################################
 check_pod() {
   pod_list=$(kctl -n "ns-mid-storage-$ENVIRONMENT" get pods --no-headers 2>/dev/null || true)
-
   while read -r line; do
     [[ -z "$line" ]] && continue
+    name=$(echo "$line" | awk '{print $1}')
     status=$(echo "$line" | awk '{print $3}')
-    if [[ "$status" != "Running" ]]; then
-      add_entry "error"
-    fi
+    add_entry "{\"resource_type\":\"Pod\",\"name\":\"$name\",\"status\":\"$status\"}"
   done <<< "$pod_list"
 }
 
 #######################################
-# 汇总函数
-#######################################
-calculate_summary() {
-  error_count=$(printf "%s\n" "${json_entries[@]}" | grep -c "^error$" || true)
-  warning_count=$(printf "%s\n" "${json_entries[@]}" | grep -c "^warning$" || true)
-
-  if [[ "$error_count" -gt 0 ]]; then
-    echo "error"
-  elif [[ "$warning_count" -gt 0 ]]; then
-    echo "warning"
-  else
-    echo "ok"
-  fi
-}
-
-#######################################
-# 主流程
+# 输出 JSON
 #######################################
 main() {
   check_namespace
   check_service
   check_pvc
   check_pod
-  calculate_summary
+
+  # 输出数组 JSON
+  echo "["
+  local first=true
+  for entry in "${json_entries[@]}"; do
+    if [ "$first" = true ]; then
+      first=false
+    else
+      echo ","
+    fi
+    echo -n "$entry"
+  done
+  echo
+  echo "]"
 }
 
 #######################################
-# 可执行入口隔离
+# 可执行入口
 #######################################
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   main "$@"
