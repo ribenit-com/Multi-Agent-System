@@ -40,7 +40,7 @@ source ./check_gitlab_names_json.sh
 
 ## 3️⃣ 返回结果是什么
 
-正常情况下输出：
+### 终端输出
 
 ```text
 ✅ PASS
@@ -49,10 +49,34 @@ source ./check_gitlab_names_json.sh
 🎉 All tests passed
 ```
 
-对应汇总返回值：
+---
 
-| 场景 | calculate_summary 返回值 |
-|------|--------------------------|
+### calculate_summary 返回值格式
+
+函数返回的是一个字符串：
+
+```bash
+error
+```
+
+或
+
+```bash
+warning
+```
+
+或
+
+```bash
+ok
+```
+
+---
+
+### 返回值对应关系
+
+| 场景 | 返回值 |
+|------|--------|
 | namespace 不存在 | error |
-| 全部 warning | warning |
+| 存在 warning 无 error | warning |
 | 无异常 | ok |
