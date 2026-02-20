@@ -1,18 +1,19 @@
 #!/bin/bash
 # =============================================================
-# GitLab YAML + JSON + HTML 生成脚本（固定输出目录版）
-# YAML 输出目录: /mnt/truenas/Gitlab_yaml_output
-# 日志/HTML 输出目录: /mnt/truenas/Gitlab_output
+# GitLab YAML + JSON + HTML 生成脚本（临时目录版）
 # =============================================================
 
 set -euo pipefail
 
 #########################################
-# 配置固定输出目录
+# 统一临时目录
 #########################################
-YAML_DIR="/mnt/truenas/Gitlab_yaml_output"
-OUTPUT_DIR="/mnt/truenas/Gitlab_output"
-mkdir -p "$YAML_DIR" "$OUTPUT_DIR"
+BASE_DIR=$(mktemp -d)
+YAML_DIR="$BASE_DIR/yaml"
+OUTPUT_DIR="$BASE_DIR/output"
+
+mkdir -p "$YAML_DIR"
+mkdir -p "$OUTPUT_DIR"
 
 # 全量详尽日志
 FULL_LOG="$OUTPUT_DIR/full_script.log"
@@ -23,7 +24,6 @@ HTML_FILE="$OUTPUT_DIR/postgres_ha_info.html"
 
 # 输出简要信息到终端
 echo "📄 全量日志文件: $FULL_LOG"
-echo "📄 YAML 输出目录: $YAML_DIR"
 echo "📄 输出目录: $OUTPUT_DIR"
 
 # 重定向 stdout/stderr 到日志文件
@@ -35,7 +35,7 @@ export PS4='+[$LINENO] '
 set -x
 
 #########################################
-# 文件前缀
+# 模块名
 #########################################
 MODULE="gb"
 
@@ -160,7 +160,7 @@ printf '%s\n' "${yaml_files[@]}" | jq -R . | jq -s . > "$JSON_FILE"
 {
     echo "<html><head><title>GitLab YAML & JSON 状态</title></head><body>"
     echo "<h2>生成时间: $(date '+%Y-%m-%d %H:%M:%S')</h2>"
-    echo "<h3>YAML 输出目录: $YAML_DIR</h3>"
+    echo "<h3>YAML 文件夹: $YAML_DIR</h3>"
     echo "<h3>JSON 文件: $JSON_FILE</h3>"
     echo "<h3>YAML 文件列表:</h3><ul>"
     for f in "${yaml_files[@]}"; do
@@ -179,6 +179,5 @@ set +x
 # 恢复 stdout/stderr 到终端
 exec 1>&3 2>&4
 
-echo "✅ YAML / JSON / HTML 已生成"
-echo "📄 YAML 输出目录: $YAML_DIR"
-echo "📄 全量日志/HTML: $OUTPUT_DIR"
+echo "✅ YAML / JSON / HTML 已生成在 $BASE_DIR"
+echo "📄 全量日志: $FULL_LOG"
