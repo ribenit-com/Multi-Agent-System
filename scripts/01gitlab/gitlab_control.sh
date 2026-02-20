@@ -1,6 +1,6 @@
 #!/bin/bash
 # ===================================================
-# GitLab HA 控制脚本（前台执行可见 v1.7）
+# GitLab HA 控制脚本（前台执行可见 v1.8）
 # 日期：2026-02-21
 # 功能：
 #   - 强制下载最新 JSON / HTML 脚本
@@ -8,10 +8,11 @@
 #   - 轮询 JSON 输出（倒计时显示）
 #   - 异常统计（Pod/PVC/Namespace/Service）
 #   - 生成 HTML 报告
+#   - JSON 格式清晰检查，显示原始与清理后的内容
 # ===================================================
 
 set -euo pipefail
-SCRIPT_VERSION="v1.7"
+SCRIPT_VERSION="v1.8"
 MODULE_NAME="${1:-GitLab_HA}"
 WORK_DIR=$(mktemp -d)
 JSON_LOG="$WORK_DIR/json.log"
@@ -82,30 +83,41 @@ if [ ! -s "$TMP_JSON" ]; then
 fi
 
 # -------------------------
-# JSON 格式检查
+# 清晰 JSON 格式检查
 # -------------------------
 echo -e "\n🔹 检查 JSON 格式..."
-if ! jq empty "$TMP_JSON" 2>/dev/null; then
-    echo -e "\033[31m❌ JSON 文件格式错误\033[0m"
-    head -n 20 "$TMP_JSON"
+if [[ ! -s "$TMP_JSON" ]]; then
+    echo -e "\033[31m❌ JSON 文件为空\033[0m"
     exit 1
 fi
-echo -e "✅ JSON 格式合法"
 
-# -------------------------
+# 清理不可见控制字符（BOM/控制字符）
+TMP_JSON_CLEAN="$WORK_DIR/tmp_json_clean.json"
+tr -d '\000-\011\013\014\016-\037' < "$TMP_JSON" > "$TMP_JSON_CLEAN"
+
+# jq 格式化检查
+if ! jq . "$TMP_JSON_CLEAN" > /dev/null 2>&1; then
+    echo -e "\033[31m❌ JSON 文件格式错误\033[0m"
+    echo -e "📄 原始内容前20行:"
+    head -n 20 "$TMP_JSON"
+    echo -e "📄 清理后的内容前20行:"
+    head -n 20 "$TMP_JSON_CLEAN"
+    exit 1
+fi
+echo -e "✅ JSON 文件格式合法"
+
 # 即时预览 JSON 前 5 行
-# -------------------------
 echo -e "\n🔹 JSON 文件预览（前5行）:"
-head -n 5 "$TMP_JSON"
+head -n 5 "$TMP_JSON_CLEAN"
 
 # -------------------------
-# 异常统计与详细输出
+# 异常统计
 # -------------------------
 echo -e "\n🔹 检查 Pod/PVC/Namespace/Service 异常..."
-POD_ISSUES=$(jq '[.[] | select(.resource_type=="Pod" and .status!="Running")] | length' < "$TMP_JSON")
-PVC_ISSUES=$(jq '[.[] | select(.resource_type=="PVC" and .status!="命名规范")] | length' < "$TMP_JSON")
-NS_ISSUES=$(jq '[.[] | select(.resource_type=="Namespace" and .status!="存在")] | length' < "$TMP_JSON")
-SVC_ISSUES=$(jq '[.[] | select(.resource_type=="Service" and .status!="存在")] | length' < "$TMP_JSON")
+POD_ISSUES=$(jq '[.[] | select(.resource_type=="Pod" and .status!="Running")] | length' < "$TMP_JSON_CLEAN")
+PVC_ISSUES=$(jq '[.[] | select(.resource_type=="PVC" and .status!="命名规范")] | length' < "$TMP_JSON_CLEAN")
+NS_ISSUES=$(jq '[.[] | select(.resource_type=="Namespace" and .status!="存在")] | length' < "$TMP_JSON_CLEAN")
+SVC_ISSUES=$(jq '[.[] | select(.resource_type=="Service" and .status!="存在")] | length' < "$TMP_JSON_CLEAN")
 
 [[ "$POD_ISSUES" -gt 0 ]] && echo -e "\033[31m⚠️ Pod异常: $POD_ISSUES 个\033[0m"
 [[ "$PVC_ISSUES" -gt 0 ]] && echo -e "\033[33m⚠️ PVC异常: $PVC_ISSUES 个\033[0m"
@@ -116,7 +128,7 @@ SVC_ISSUES=$(jq '[.[] | select(.resource_type=="Service" and .status!="存在")]
 # 生成 HTML 报告
 # -------------------------
 echo -e "\n🔹 生成 HTML 报告..."
-run "$HTML_SCRIPT" "$MODULE_NAME" "$TMP_JSON"
+run "$HTML_SCRIPT" "$MODULE_NAME" "$TMP_JSON_CLEAN"
 
 # -------------------------
 # 清理
