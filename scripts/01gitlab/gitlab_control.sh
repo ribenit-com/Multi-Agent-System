@@ -1,20 +1,20 @@
 #!/bin/bash
 # ===================================================
-# GitLab HA 控制脚本（优化版 v1.1）
+# GitLab HA 控制脚本（优化版 v1.2）
 # 最终修改日期：2026-02-21
 # 功能：
 #   - 每次下载最新 JSON 检测脚本和 HTML 报告生成脚本
 #   - 强制下载，每次都会覆盖本地脚本
 #   - 执行 JSON 检测
 #   - 轮询等待 JSON 文件生成（3 秒倒计时）
-#   - 实时显示 JSON 执行日志
+#   - 即时预览 JSON 前 5 行
 #   - Pod / PVC / Service / Namespace 异常统计
 #   - 生成 HTML 报告
 # ===================================================
 
 set -euo pipefail
 
-SCRIPT_VERSION="v1.1"
+SCRIPT_VERSION="v1.2"
 MODULE_NAME="${1:-GitLab_HA}"
 WORK_DIR=$(mktemp -d)
 echo -e "=============================="
@@ -109,6 +109,12 @@ if ! jq empty "$TMP_JSON" 2>/dev/null; then
     cat "$TMP_JSON"
     exit 1
 fi
+
+# -------------------------
+# 即时预览 JSON 前 5 行
+# -------------------------
+echo -e "\n🔹 JSON 文件预览（前 5 行）:"
+head -n 5 "$TMP_JSON"
 
 # -------------------------
 # Pod / PVC / Service / Namespace 异常统计
