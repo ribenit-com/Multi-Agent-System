@@ -1,6 +1,4 @@
-# HeliosGuard 验证逻辑说明书
-脚本名称: HeliosGuard
-原名称: gitlab_ha_full_deploy.sh
+# gitlab_ha_full_deploy.sh 验证逻辑说明书
 版本: v1.0
 用途: GitLab HA 部署前后合规验证逻辑说明
 
@@ -8,7 +6,7 @@
 
 # 1. 脚本定位
 
-HeliosGuard 是用于 GitLab HA 架构部署过程中的合规验证模块。
+gitlab_ha_full_deploy.sh 是用于 GitLab HA 架构部署过程中的合规验证模块。
 
 本脚本不负责业务逻辑。
 本脚本专注于：
@@ -261,7 +259,7 @@ HeliosGuard 的验证逻辑遵循：
 
 # 12. 结论
 
-HeliosGuard 是 gitlab_ha_full_deploy.sh 的验证核心模块。
+gitlab_ha_full_deploy.sh 是 gitlab_ha_full_deploy.sh 的验证核心模块。
 
 其职责仅限于：
 
