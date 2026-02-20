@@ -14,23 +14,6 @@
 
 # GitLab HA 单体测试执行说明
 
-## 1️⃣ 如何执行
-
-```bash
-chmod +x gitlab_ha_full_deploy_UnitTest.sh
-./gitlab_ha_full_deploy_UnitTest.sh
-```
-
----
-
-## 2️⃣ 执行了哪些函数
-
-测试文件通过：
-
-```bash
-source ./check_gitlab_names_json.sh
-# GitLab HA 单体测试执行说明（含下载路径）
-```
 
 ## 1️⃣ 下载测试脚本
 
