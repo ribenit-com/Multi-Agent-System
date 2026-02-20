@@ -1,10 +1,10 @@
 #!/bin/bash
 # ===================================================
-# GitLab HA 控制脚本（完整版）
+# GitLab HA 控制脚本（最新版，每次强制下载）
 # 功能：
-#   - 下载 JSON 检测脚本和 HTML 报告生成脚本
-#   - 执行检测
-#   - 轮询等待 JSON 文件生成（带读秒）
+#   - 每次下载最新 JSON 检测脚本和 HTML 报告生成脚本
+#   - 执行 JSON 检测
+#   - 轮询等待 JSON 文件生成（带 3 秒读秒显示）
 #   - 检查 JSON 格式
 #   - Pod / PVC 异常统计
 #   - 生成 HTML 报告
@@ -22,7 +22,7 @@ echo "🔹 工作目录: $WORK_DIR"
 download_script() {
     local url="$1"
     local dest="$2"
-    echo "🔹 下载脚本: $url"
+    echo "🔹 下载最新脚本: $url"
     http_status=$(curl -s -o "$dest" -w "%{http_code}" "$url")
     if [[ "$http_status" -ne 200 ]]; then
         echo -e "\033[31m❌ 下载失败 (HTTP $http_status)：$url\033[0m"
@@ -41,7 +41,7 @@ JSON_SCRIPT="$WORK_DIR/check_gitlab_names_json.sh"
 HTML_SCRIPT="$WORK_DIR/check_gitlab_names_html.sh"
 
 # -------------------------
-# 下载脚本
+# 每次强制下载最新脚本
 # -------------------------
 download_script "$JSON_SCRIPT_URL" "$JSON_SCRIPT"
 download_script "$HTML_SCRIPT_URL" "$HTML_SCRIPT"
