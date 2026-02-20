@@ -51,9 +51,9 @@ echo -e "${YELLOW}📥 テスト対象スクリプトを準備中...${NC}"
 if [ ! -f "$TARGET_SCRIPT" ]; then
     echo "⬇️ Downloading target script..."
     
-    # リダイレクトに対応
+    # 修正済み URL（中文目录已编码）
     curl -L -f \
-    https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/GitLab安装包/check_gitlab_names_html.sh \
+    https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/01.gitlab%E5%AE%89%E8%A3%85%E5%8C%85/check_gitlab_names_html.sh \
     -o "$TARGET_SCRIPT" || {
         echo -e "${RED}❌ スクリプトのダウンロードに失敗しました${NC}"
         exit 1
@@ -246,7 +246,7 @@ else
 fi
 TOTAL_TESTS=$((TOTAL_TESTS + 1))
 
-# 追加テスト: JSON配列処理
+# UT-09: JSON配列処理
 print_test_header "UT-09: JSON配列処理"
 cat <<EOF > "$TEST_DIR/test_array.json"
 [
@@ -264,7 +264,7 @@ else
 fi
 TOTAL_TESTS=$((TOTAL_TESTS + 1))
 
-# 追加テスト: 日本語文字化け対策
+# UT-10: 日本語文字コード
 print_test_header "UT-10: 日本語文字コード"
 cat <<EOF > "$TEST_DIR/test_japanese.json"
 {
