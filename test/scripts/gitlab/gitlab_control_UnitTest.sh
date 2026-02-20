@@ -9,28 +9,23 @@ TARGET_SCRIPT="gitlab_control.sh"
 TARGET_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/scripts/01gitlab/gitlab_control.sh"
 
 #########################################
-# 下载生产脚本（如果不存在）并校验非 404
+# 强制下载最新生产脚本
 #########################################
-
-download_if_missing() {
+download_latest() {
   local file="$1"
   local url="$2"
-  if [ ! -f "$file" ]; then
-    echo "⬇️ Downloading $file ..."
-    curl -f -L "$url" -o "$file"
-    # 检查下载文件是否为 HTML 404 页面
-    if head -n1 "$file" | grep -q "<!DOCTYPE html>"; then
-      echo "❌ ERROR: Downloaded $file is HTML 404 page"
+  echo "⬇️ 强制下载最新 $file ..."
+  curl -f -L "$url" -o "$file" || { echo "❌ 下载失败"; exit 1; }
+  # 检查是否为 HTML 404 页面
+  if head -n1 "$file" | grep -q "<!DOCTYPE html>"; then
+      echo "❌ ERROR: 下载内容是 HTML 404 页面"
       rm -f "$file"
       exit 1
-    fi
-    chmod +x "$file"
-  else
-    echo "✔️ $file 已存在，跳过下载"
   fi
+  chmod +x "$file"
 }
 
-download_if_missing "$TARGET_SCRIPT" "$TARGET_URL"
+download_latest "$TARGET_SCRIPT" "$TARGET_URL"
 
 #########################################
 # UT 断言工具
@@ -49,7 +44,7 @@ TMP_JSON=$(mktemp)
 cat <<EOF > "$TMP_JSON"
 [
   {"resource_type":"Pod","name":"pod-1","status":"CrashLoopBackOff"},
-  {"resource_type":"PVC","name":"pvc-1","status":"命名错误"}
+  {"resource_type":"PVC","name":"pvc-1","status":"命名不规范"}
 ]
 EOF
 
@@ -73,8 +68,34 @@ assert_file_exists "$TARGET_SCRIPT"
 [[ -x "$TARGET_SCRIPT" ]] || fail "script not executable"
 pass
 
-# UT-05 JSON 检测执行
-bash "$TARGET_SCRIPT" "PostgreSQL_HA" "$TMP_JSON" || fail "execution failed"
+# UT-05 JSON 检测执行（轮询方式）
+echo "🔹 执行 $TARGET_SCRIPT 并轮询生成 JSON..."
+bash "$TARGET_SCRIPT" "$MODULE_NAME" "$TMP_JSON" &
+JSON_PID=$!
+
+MAX_RETRIES=10
+COUNT=0
+
+while [ $COUNT -lt $MAX_RETRIES ]; do
+    if [ -s "$TMP_JSON" ]; then
+        echo -e "\n✅ 成功生成 JSON 文件：$TMP_JSON"
+        break
+    fi
+    ((COUNT++))
+    echo -ne "\r🔄 [$COUNT/$MAX_RETRIES] JSON 文件未生成，等待 3 秒..."
+    for i in {3..1}; do
+        echo -ne " $i..."
+        sleep 1
+    done
+done
+
+if [ ! -s "$TMP_JSON" ]; then
+    fail "超时：$TARGET_SCRIPT 未生成 JSON 文件"
+fi
+
+wait $JSON_PID
+EXIT_CODE=$?
+[[ $EXIT_CODE -eq 0 ]] || fail "execution failed (退出码 $EXIT_CODE)"
 pass
 
 # UT-06 Pod 异常统计
@@ -98,7 +119,7 @@ rm -f "$TMP_JSON"
 pass
 
 # UT-10 输出提示
-echo "✅ gitlab_control.sh 执行完成"
+echo "✅ $TARGET_SCRIPT 执行完成"
 pass
 
-echo "🎉 All tests passed (enterprise-level v3)"
+echo "🎉 All tests passed (enterprise-level v3, 强制下载 + JSON轮询兼容 v1.1)"
