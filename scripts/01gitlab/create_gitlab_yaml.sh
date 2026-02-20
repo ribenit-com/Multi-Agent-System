@@ -2,10 +2,10 @@
 set -euo pipefail
 
 #########################################
-# GitLab YAML 生成脚本（生产级增强版）
+# GitLab YAML 生成脚本（生产级一体化版）
 #########################################
 
-VERSION="v1.0.2"
+VERSION="v1.1.0"
 LAST_MODIFIED="2026-02-21"
 AUTHOR="zdl@cmaster01"
 
@@ -53,7 +53,7 @@ write_file() {
 }
 
 #########################################
-# Namespace YAML
+# 生成 Namespace YAML
 #########################################
 write_file "${MODULE}_namespace.yaml" \
 "apiVersion: v1
@@ -62,7 +62,7 @@ metadata:
   name: $NAMESPACE"
 
 #########################################
-# Secret YAML
+# 生成 Secret YAML
 #########################################
 write_file "${MODULE}_secret.yaml" \
 "apiVersion: v1
@@ -75,7 +75,7 @@ stringData:
   root-password: \"secret123\""
 
 #########################################
-# StatefulSet + PVC YAML
+# 生成 StatefulSet + PVC YAML
 #########################################
 write_file "${MODULE}_statefulset.yaml" \
 "apiVersion: apps/v1
@@ -113,7 +113,7 @@ spec:
           storage: $PVC_SIZE"
 
 #########################################
-# Service YAML
+# 生成 Service YAML
 #########################################
 write_file "${MODULE}_service.yaml" \
 "apiVersion: v1
@@ -137,7 +137,7 @@ spec:
     name: registry"
 
 #########################################
-# CronJob YAML（生产级，挂载 PVC）
+# 生成 CronJob YAML
 #########################################
 write_file "${MODULE}_cronjob.yaml" \
 "apiVersion: batch/v1
@@ -170,8 +170,31 @@ spec:
                 claimName: $SECRET"
 
 #########################################
+# 扫描生成的 YAML 文件，生成 JSON
+#########################################
+OUTPUT_JSON="$WORK_DIR/yaml_list.json"
+
+yaml_files=()
+while IFS= read -r -d '' file; do
+    yaml_files+=("$file")
+done < <(find "$WORK_DIR" -type f -name "*.yaml" -print0)
+
+# 打印整齐列表
+echo "📄 当前生成 YAML 文件列表:"
+for f in "${yaml_files[@]}"; do
+    echo " - $f"
+done
+
+# 输出 JSON 文件
+if command -v jq >/dev/null 2>&1; then
+    json_array=$(printf '%s\n' "${yaml_files[@]}" | jq -R . | jq -s .)
+    echo "$json_array" > "$OUTPUT_JSON"
+    log "✅ JSON 文件已生成，可供下一个脚本读取: $OUTPUT_JSON"
+else
+    log "⚠️ jq 未安装，无法生成 JSON 文件"
+fi
+
+#########################################
 # 完成提示
 #########################################
-log "✅ GitLab YAML 已生成到 $WORK_DIR"
-log "📌 输出目录最终文件列表:"
-ls -lh "$WORK_DIR"
+log "✅ GitLab YAML 一体化生成完成！"
