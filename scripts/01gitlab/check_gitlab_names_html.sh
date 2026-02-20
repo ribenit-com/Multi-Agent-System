@@ -52,7 +52,7 @@ if [ ! -f "$TARGET_SCRIPT" ]; then
     echo "⬇️ Downloading target script..."
     
     curl -L -f \
-    https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/01.gitlab%E5%AE%89%E8%A3%85%E5%8C%85/check_gitlab_names_html.sh \
+    https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/scripts/01gitlab/check_gitlab_names_html.sh \
     -o "$TARGET_SCRIPT" || {
         echo -e "${RED}❌ スクリプトのダウンロードに失敗しました${NC}"
         exit 1
