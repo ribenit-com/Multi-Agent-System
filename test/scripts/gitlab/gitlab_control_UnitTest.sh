@@ -2,14 +2,14 @@
 set -euo pipefail
 
 #########################################
-# 脚本路径 & Raw URL
+# 脚本路径 & Raw URL（URL 编码，稳定）
 #########################################
 
 TARGET_SCRIPT="gitlab_control.sh"
-TARGET_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/scripts/01.gitlab安装包/gitlab_control.sh"
+TARGET_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/scripts/01.gitlab%E5%AE%89%E8%A3%85%E5%8C%85/gitlab_control.sh"
 
 #########################################
-# 下载生产脚本（如果不存在）
+# 下载生产脚本（如果不存在）并校验非 404
 #########################################
 
 download_if_missing() {
@@ -18,7 +18,15 @@ download_if_missing() {
   if [ ! -f "$file" ]; then
     echo "⬇️ Downloading $file ..."
     curl -f -L "$url" -o "$file"
+    # 检查下载文件是否为 HTML 404 页面
+    if head -n1 "$file" | grep -q "<!DOCTYPE html>"; then
+      echo "❌ ERROR: Downloaded $file is HTML 404 page"
+      rm -f "$file"
+      exit 1
+    fi
     chmod +x "$file"
+  else
+    echo "✔️ $file 已存在，跳过下载"
   fi
 }
 
