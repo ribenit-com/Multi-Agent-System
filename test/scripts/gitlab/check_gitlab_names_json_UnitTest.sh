@@ -1,31 +1,32 @@
 #!/bin/bash
-set -e
+set -euo pipefail
 
 #########################################
-# 下载执行脚本（UnitTest工具，不含生产函数）
+# 脚本路径 & URL
 #########################################
 
 EXEC_SCRIPT="check_gitlab_names_json_UnitTest.sh"
-if [ ! -f "$EXEC_SCRIPT" ]; then
-  echo "⬇️ Downloading execution script..."
-  curl -f -L \
-    https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/test/scripts/gitlab/check_gitlab_names_json_UnitTest.sh \
-    -o "$EXEC_SCRIPT"
-  chmod +x "$EXEC_SCRIPT"
-fi
-
-#########################################
-# 下载生产脚本（被测试函数）
-#########################################
-
 TARGET_SCRIPT="check_gitlab_names_json.sh"
-if [ ! -f "$TARGET_SCRIPT" ]; then
-  echo "⬇️ Downloading target script..."
-  curl -f -L \
-    https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/01.gitlab%E5%AE%89%E8%A3%85%E5%8C%85/check_gitlab_names_json.sh \
-    -o "$TARGET_SCRIPT"
-  chmod +x "$TARGET_SCRIPT"
-fi
+
+EXEC_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/test/scripts/gitlab/check_gitlab_names_json_UnitTest.sh"
+TARGET_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/scripts/01.gitlab安装包/check_gitlab_names_json.sh"
+
+#########################################
+# 下载脚本（如果不存在）
+#########################################
+
+download_if_missing() {
+  local file="$1"
+  local url="$2"
+  if [ ! -f "$file" ]; then
+    echo "⬇️ Downloading $file ..."
+    curl -f -L "$url" -o "$file"
+    chmod +x "$file"
+  fi
+}
+
+download_if_missing "$EXEC_SCRIPT" "$EXEC_URL"
+download_if_missing "$TARGET_SCRIPT" "$TARGET_URL"
 
 #########################################
 # 加载生产代码
@@ -34,7 +35,7 @@ fi
 source ./"$TARGET_SCRIPT"
 
 #########################################
-# 断言工具
+# UT 断言工具
 #########################################
 
 fail() {
@@ -47,14 +48,14 @@ pass() {
 }
 
 assert_equal() {
-  expected="$1"
-  actual="$2"
+  local expected="$1"
+  local actual="$2"
   [[ "$expected" == "$actual" ]] || fail "expected=$expected actual=$actual"
   pass
 }
 
 assert_array_contains() {
-  value="$1"
+  local value="$1"
   shift
   for item in "$@"; do
     [[ "$item" == "$value" ]] && pass && return
@@ -63,9 +64,9 @@ assert_array_contains() {
 }
 
 assert_array_length() {
-  expected="$1"
+  local expected="$1"
   shift
-  actual="$#"
+  local actual="$#"
   [[ "$expected" -eq "$actual" ]] || fail "expected length=$expected actual=$actual"
   pass
 }
@@ -76,21 +77,11 @@ assert_array_length() {
 
 mock_kctl() {
   case "$*" in
-    "get ns ns-mid-storage-prod")
-      return 1
-      ;;
-    *"get svc gitlab"* )
-      return 1
-      ;;
-    *"get pvc -o name"* )
-      echo "pvc/badname"
-      ;;
-    *"get pods --no-headers"* )
-      echo "gitlab-xxx 1/1 CrashLoopBackOff 3 1m"
-      ;;
-    *)
-      return 0
-      ;;
+    "get ns ns-mid-storage-prod") return 1 ;;
+    *"get svc gitlab"*) return 1 ;;
+    *"get pvc -o name"*) echo "pvc/badname" ;;
+    *"get pods --no-headers"*) echo "gitlab-xxx 1/1 CrashLoopBackOff 3 1m" ;;
+    *) return 0 ;;
   esac
 }
 
@@ -99,80 +90,53 @@ kctl() {
 }
 
 #########################################
-# UT-01 namespace audit → error
+# UT 测试
 #########################################
 
+# UT-01 namespace audit → error
 json_entries=()
 MODE="audit"
 check_namespace
-
 assert_array_length 1 "${json_entries[@]}"
 assert_array_contains "error" "${json_entries[@]}"
 assert_equal "error" "$(calculate_summary)"
 
-#########################################
 # UT-02 namespace enforce → warning
-#########################################
-
 json_entries=()
 MODE="enforce"
 check_namespace
-
 assert_array_length 1 "${json_entries[@]}"
 assert_array_contains "warning" "${json_entries[@]}"
 assert_equal "warning" "$(calculate_summary)"
 
-#########################################
 # UT-03 service 不存在 → error
-#########################################
-
 json_entries=()
 check_service
-
 assert_array_contains "error" "${json_entries[@]}"
 assert_equal "error" "$(calculate_summary)"
 
-#########################################
 # UT-04 pvc 命名异常 → warning
-#########################################
-
 json_entries=()
 check_pvc
-
 assert_array_contains "warning" "${json_entries[@]}"
 assert_equal "warning" "$(calculate_summary)"
 
-#########################################
 # UT-05 pod CrashLoop → error
-#########################################
-
 json_entries=()
 check_pod
-
 assert_array_contains "error" "${json_entries[@]}"
 assert_equal "error" "$(calculate_summary)"
 
-#########################################
 # UT-06 summary 有 error → error
-#########################################
-
 json_entries=("error" "warning")
 assert_equal "error" "$(calculate_summary)"
 
-#########################################
 # UT-07 仅 warning → warning
-#########################################
-
 json_entries=("warning" "warning")
 assert_equal "warning" "$(calculate_summary)"
 
-#########################################
 # UT-08 无异常 → ok
-#########################################
-
 json_entries=()
 assert_equal "ok" "$(calculate_summary)"
 
-#########################################
-
-echo "🎉 All tests passed (v3 enterprise level)"
+echo "🎉 All tests passed (enterprise-level v3)"
