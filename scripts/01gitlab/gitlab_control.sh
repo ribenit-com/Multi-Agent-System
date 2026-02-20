@@ -1,11 +1,13 @@
 #!/bin/bash
 # ===================================================
-# GitLab HA 控制脚本（改进版）
+# GitLab HA 控制脚本（完整版）
 # 功能：
 #   - 下载 JSON 检测脚本和 HTML 报告生成脚本
 #   - 执行检测
+#   - 轮询等待 JSON 文件生成（带读秒）
+#   - 检查 JSON 格式
+#   - Pod / PVC 异常统计
 #   - 生成 HTML 报告
-#   - 下载校验 + JSON 格式检查
 # ===================================================
 
 set -euo pipefail
@@ -30,10 +32,10 @@ download_script() {
 }
 
 # -------------------------
-# 脚本 URL（改为英文路径）
+# 脚本 URL
 # -------------------------
 JSON_SCRIPT_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/01gitlab/check_gitlab_names_json.sh"
-HTML_SCRIPT_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System//main/scripts/01gitlab/check_gitlab_names_html.sh"
+HTML_SCRIPT_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/01gitlab/check_gitlab_names_html.sh"
 
 JSON_SCRIPT="$WORK_DIR/check_gitlab_names_json.sh"
 HTML_SCRIPT="$WORK_DIR/check_gitlab_names_html.sh"
@@ -50,13 +52,38 @@ download_script "$HTML_SCRIPT_URL" "$HTML_SCRIPT"
 TMP_JSON=$(mktemp)
 
 # -------------------------
-# 执行 JSON 脚本并检查输出
+# 执行 JSON 脚本并轮询等待输出（带 3 秒读秒显示）
 # -------------------------
 echo "🔹 执行 JSON 检测脚本..."
-set +e
-bash "$JSON_SCRIPT" > "$TMP_JSON" 2> "$WORK_DIR/json_error.log"
+bash "$JSON_SCRIPT" > "$TMP_JSON" 2> "$WORK_DIR/json_error.log" &
+JSON_PID=$!
+
+MAX_RETRIES=10
+COUNT=0
+
+while [ $COUNT -lt $MAX_RETRIES ]; do
+    if [ -s "$TMP_JSON" ]; then
+        echo -e "\n✅ 成功生成 JSON 文件：$TMP_JSON"
+        break
+    fi
+    ((COUNT++))
+    echo -ne "\r🔄 [$COUNT/$MAX_RETRIES] JSON 文件未生成，等待 3 秒..."
+    for i in {3..1}; do
+        echo -ne " $i..."
+        sleep 1
+    done
+done
+
+# 检查轮询结果
+if [ ! -s "$TMP_JSON" ]; then
+    echo -e "\n\033[31m❌ 超时：$JSON_SCRIPT 未能生成 JSON 文件。\033[0m"
+    cat "$WORK_DIR/json_error.log"
+    exit 1
+fi
+
+# 等待脚本执行完成并获取退出码
+wait $JSON_PID
 EXIT_CODE=$?
-set -e
 
 if [[ $EXIT_CODE -ne 0 ]]; then
     echo -e "\033[31m❌ JSON 检测脚本执行失败，查看日志：$WORK_DIR/json_error.log\033[0m"
@@ -64,16 +91,17 @@ if [[ $EXIT_CODE -ne 0 ]]; then
     exit 1
 fi
 
+# -------------------------
 # 检查 JSON 格式
+# -------------------------
 if ! jq empty "$TMP_JSON" 2>/dev/null; then
     echo -e "\033[31m❌ 输出不是合法 JSON，请检查脚本或网络下载是否正确\033[0m"
-    echo "查看文件内容：$TMP_JSON"
     cat "$TMP_JSON"
     exit 1
 fi
 
 # -------------------------
-# 检查异常
+# Pod / PVC 异常统计
 # -------------------------
 POD_ISSUES=$(jq '[.[] | select(.resource_type=="Pod" and .status!="Running")] | length' < "$TMP_JSON")
 PVC_ISSUES=$(jq '[.[] | select(.resource_type=="PVC" and .status!="命名规范")] | length' < "$TMP_JSON")
