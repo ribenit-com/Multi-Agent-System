@@ -1,6 +1,6 @@
 #!/bin/bash
 # ===================================================
-# GitLab PostgreSQL HA 控制脚本
+# GitLab HA 控制脚本
 # 功能：
 #   - 下载 JSON 检测脚本和 HTML 报告生成脚本
 #   - 执行检测
@@ -9,18 +9,18 @@
 
 set -euo pipefail
 
-MODULE_NAME="${1:-PostgreSQL_HA}"
+MODULE_NAME="${1:-GitLab_HA}"
 WORK_DIR=$(mktemp -d)
 echo "🔹 工作目录: $WORK_DIR"
 
 # -------------------------
 # 下载远程脚本
 # -------------------------
-JSON_SCRIPT_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/scripts/PostgreSQL%E5%AE%89%E8%A3%85%E5%8C%85/check_postgres_names_json.sh"
-HTML_SCRIPT_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/scripts/PostgreSQL%E5%AE%89%E8%A3%85%E5%8C%85/check_postgres_names_html.sh"
+JSON_SCRIPT_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/scripts/01.gitlab%E5%AE%89%E8%A3%85%E5%8C%85/check_gitlab_names_json.sh"
+HTML_SCRIPT_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/scripts/01.gitlab%E5%AE%89%E8%A3%85%E5%8C%85/check_gitlab_names_html.sh"
 
-JSON_SCRIPT="$WORK_DIR/check_postgres_names_json.sh"
-HTML_SCRIPT="$WORK_DIR/check_postgres_names_html.sh"
+JSON_SCRIPT="$WORK_DIR/check_gitlab_names_json.sh"
+HTML_SCRIPT="$WORK_DIR/check_gitlab_names_html.sh"
 
 echo "🔹 下载 JSON 检测脚本..."
 curl -fsSL "$JSON_SCRIPT_URL" -o "$JSON_SCRIPT"
