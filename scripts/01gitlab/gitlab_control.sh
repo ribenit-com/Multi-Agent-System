@@ -30,10 +30,10 @@ download_script() {
 }
 
 # -------------------------
-# 脚本 URL
+# 脚本 URL（改为英文路径）
 # -------------------------
-JSON_SCRIPT_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/scripts/01.gitlab%E5%AE%89%E8%A3%85%E5%8C%85/check_gitlab_names_json.sh"
-HTML_SCRIPT_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/scripts/01.gitlab%E5%AE%89%E8%A3%85%E5%8C%85/check_gitlab_names_html.sh"
+JSON_SCRIPT_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/scripts/01gitlab/check_gitlab_names_json.sh"
+HTML_SCRIPT_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/scripts/01gitlab/check_gitlab_names_html.sh"
 
 JSON_SCRIPT="$WORK_DIR/check_gitlab_names_json.sh"
 HTML_SCRIPT="$WORK_DIR/check_gitlab_names_html.sh"
