@@ -27,11 +27,11 @@
 
 ## 1️⃣ 准备测试环境
 
-1. 下载控制脚本：
+1. 下载控制脚本（被测对象）：
 
 ```bash
 curl -L \
-  https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/PostgreSQL%E5%AE%89%E8%A3%85%E5%8C%85/gitlab_control.sh \
+  https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/scripts/01.gitlab安装包/gitlab_control.sh \
   -o gitlab_control.sh
 ```
 
@@ -41,7 +41,15 @@ curl -L \
 chmod +x gitlab_control.sh
 ```
 
-3. 测试 JSON 示例（可模拟 Pod/PVC 异常）：
+3. 下载单体测试脚本：
+
+```bash
+curl -L \
+  https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/test/scripts/gitlab/gitlab_control_UnitTest.sh \
+  -o gitlab_control_UnitTest.sh
+```
+
+4. 测试 JSON 示例（可模拟 Pod/PVC 异常）：
 
 ```bash
 cat <<EOF > test.json
@@ -60,6 +68,12 @@ EOF
 ./gitlab_control.sh PostgreSQL_HA
 ```
 
+或者直接运行单体测试：
+
+```bash
+./gitlab_control_UnitTest.sh
+```
+
 ---
 
 ## 3️⃣ 期望控制台输出
@@ -73,6 +87,7 @@ EOF
 ⚠️ 检测到 1 个 PVC 异常
 🔹 生成 HTML 报告...
 ✅ GitLab 控制脚本执行完成: 模块 = PostgreSQL_HA
+🎉 All tests passed (enterprise-level v3)
 ```
 
 ---
