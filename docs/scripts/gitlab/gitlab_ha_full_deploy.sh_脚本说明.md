@@ -1,224 +1,209 @@
-# HeliosGuard 合规审计与自愈引擎
-版本: v4.0
-状态: 企业生产级
-作者: DevOps Governance Framework
-适用范围: Kubernetes / GitOps / 企业级数据库系统
+# HeliosGuard 验证逻辑说明书
+脚本名称: HeliosGuard
+原名称: gitlab_ha_full_deploy.sh
+版本: v1.0
+用途: GitLab HA 部署前后合规验证逻辑说明
 
 ============================================================
 
-# 1. 系统定位
+# 1. 脚本定位
 
-HeliosGuard 是企业级 Kubernetes 合规审计与自愈引擎。
+HeliosGuard 是用于 GitLab HA 架构部署过程中的合规验证模块。
 
-它用于：
+本脚本不负责业务逻辑。
+本脚本专注于：
 
-- 命名规范治理
-- 资源完整性校验
-- 健康状态监控
-- 自动修复异常资源
-- CI/CD 合规 Gate
-- GitOps 前置审计
-
-HeliosGuard = 合规检测 + 风险分级 + 自动修复 + 审计报告
+- 命名规范校验
+- 资源存在性校验
+- 资源健康状态校验
+- 合规分级输出
 
 ============================================================
 
-# 2. 核心设计理念
+# 2. 验证逻辑总览
 
-2.1 设计目标
+验证逻辑分为五层结构：
 
-- 命名标准化
-- 架构可持续化
-- 自动化治理
-- 零人工巡检依赖
-
-2.2 工作模式
-
-HeliosGuard 支持两种模式：
-
-audit
-  仅检测，不修改资源
-
-enforce
-  自动修复可修复问题
+1️⃣ Namespace 层验证  
+2️⃣ 控制器层验证（StatefulSet / Deployment）  
+3️⃣ 服务层验证（Service）  
+4️⃣ 存储层验证（PVC）  
+5️⃣ 运行层验证（Pod 状态）  
 
 ============================================================
 
-# 3. 命名合规标准
+# 3. Namespace 验证逻辑
 
-遵循企业 GitLab 命名规则：
+3.1 验证目标
 
-<层级>-<系统/组件>-<角色>[-<环境>]
+确保 HA 环境命名符合企业规范。
 
-要求：
+3.2 标准格式
 
-- 全小写
-- 使用 "-"
-- 禁止 "_"
-- 禁止中文
-- 禁止混用 postgres / postgresql
+ns-<layer>-<system>-<env>
+
+示例：
+
+ns-mid-storage-prod
+ns-app-gitlab-prod
+
+3.3 验证规则
+
+- Namespace 是否存在
+- 是否符合命名规范
+- 是否使用非法字符
+- 是否混用缩写
+
+3.4 违规等级
+
+不存在 → error  
+命名不规范 → error  
 
 ============================================================
 
-# 4. 检测逻辑架构
+# 4. 控制器层验证逻辑
 
-检测分为五个层级：
+4.1 验证对象
 
-1️⃣ Namespace 层
-2️⃣ 控制器层（StatefulSet）
-3️⃣ 服务层（Service）
-4️⃣ 存储层（PVC）
-5️⃣ 运行层（Pod 健康）
+- StatefulSet
+- Deployment
 
-------------------------------------------------------------
+4.2 验证目标
 
-4.1 Namespace 检测逻辑
+确保 HA 核心控制器存在且命名标准化。
 
-标准格式：
+4.3 标准示例
 
-ns-mid-storage-<env>
+sts-gitlab-ha
+dep-gitlab-web
 
-检测逻辑：
+4.4 验证规则
 
-- 是否存在
+- 控制器是否存在
+- 是否多实例冲突
 - 是否命名符合规范
+- 是否存在遗留旧版本控制器
 
-若不存在：
+4.5 违规分类
 
-- audit → severity = error
-- enforce → 自动创建
+missing      → error  
+naming       → error  
+redundant    → warning  
 
-------------------------------------------------------------
+============================================================
 
-4.2 StatefulSet 检测逻辑
+# 5. Service 验证逻辑
 
-标准名称：
+5.1 验证目标
 
-sts-postgres-ha
+确保 HA 架构对外通信通道存在。
 
-检测逻辑：
+5.2 标准示例
 
-- 是否存在
+svc-gitlab-web
+svc-gitlab-ssh
+svc-gitlab-api
+
+5.3 验证规则
+
+- Service 是否存在
+- 类型是否符合设计（ClusterIP / LoadBalancer）
+- 端口是否正确
 - 是否命名一致
-- 是否存在多余控制器
 
-违规分类：
+5.4 违规等级
 
-missing
-naming
-redundant
+不存在 → error  
+端口错误 → error  
+命名不规范 → error  
 
-------------------------------------------------------------
+============================================================
 
-4.3 Service 检测逻辑
+# 6. PVC 存储验证逻辑
 
-标准名称：
+6.1 验证目标
 
-svc-postgres-primary
-svc-postgres-replica
+确保数据持久化符合 HA 架构要求。
 
-检测逻辑：
+6.2 标准格式
 
-- 是否存在
-- 是否名称正确
-
-违规等级：
-
-不存在 → error
-命名错误 → error
-
-enforce 模式：
-
-自动创建 ClusterIP Service
-
-------------------------------------------------------------
-
-4.4 PVC 检测逻辑
-
-标准格式：
-
-pvc-postgres-ha-<index>
+pvc-gitlab-ha-<index>
 
 正则规则：
 
-^pvc-postgres-ha-[0-9]+$
+^pvc-gitlab-ha-[0-9]+$
 
-检测逻辑：
+6.3 验证规则
 
-- 是否存在
-- 是否符合命名规范
+- PVC 是否存在
+- 是否与 StatefulSet 数量匹配
+- 命名是否规范
+- 是否存在历史残留 PVC
 
-违规等级：
+6.4 违规等级
 
-missing → warning
-naming → warning
+不存在 → error  
+命名不规范 → warning  
+数量不匹配 → error  
 
-enforce 模式：
+============================================================
 
-删除命名错误 PVC（可配置）
+# 7. Pod 健康验证逻辑
 
-------------------------------------------------------------
+7.1 验证目标
 
-4.5 Pod 健康检测逻辑
+确保 GitLab HA 实例全部健康运行。
 
-检测条件：
+7.2 检测条件
 
-status == Running
+Pod Status == Running
 
-异常分类：
+异常状态包括：
 
 Pending
 CrashLoopBackOff
 Error
 Terminating
+Unknown
 
-违规等级：
+7.3 违规等级
 
-unhealthy → error
-
-enforce 模式：
-
-删除异常 Pod 触发自动重建
+非 Running 状态 → error  
 
 ============================================================
 
-# 5. 合规分级模型
+# 8. 合规分级模型
 
-severity 定义：
+8.1 等级定义
 
 error
-  阻断级问题，必须修复
+  阻断级问题
+  不允许继续部署
 
 warning
-  风险级问题，可继续运行
+  风险级问题
+  可继续部署但必须记录
 
 ok
   完全合规
 
 ------------------------------------------------------------
 
-状态优先级：
+8.2 优先级规则
 
-error > warning > ok
-
-------------------------------------------------------------
-
-summary 生成规则：
-
-error_count > 0 → status = error
-warning_count > 0 → status = warning
-否则 → ok
+若存在 error → 总体状态 = error  
+若无 error 但存在 warning → 总体状态 = warning  
+否则 → ok  
 
 ============================================================
 
-# 6. JSON 输出结构
+# 9. 输出结构说明
 
-标准输出格式：
+标准 JSON 输出结构：
 
 {
   "summary": {
     "status": "error|warning|ok",
-    "mode": "audit|enforce",
     "error_count": 0,
     "warning_count": 0
   },
@@ -228,9 +213,7 @@ warning_count > 0 → status = warning
       "name": "",
       "status": "",
       "severity": "",
-      "category": "",
-      "action": "",
-      "app": ""
+      "category": ""
     }
   ]
 }
@@ -240,57 +223,52 @@ warning_count > 0 → status = warning
 resource_type
   Kubernetes 资源类型
 
+name
+  资源名称
+
 status
-  当前资源状态
+  当前检测结果
 
 severity
-  合规等级
+  error / warning
 
 category
   missing / naming / unhealthy / redundant
 
-action
-  none / created / deleted / restarted
+============================================================
+
+# 10. 验证执行时机
+
+HeliosGuard 验证在以下阶段执行：
+
+1. GitLab HA 部署前预检
+2. GitLab HA 部署后验收
+3. CI/CD Pipeline 阶段 Gate
+4. 定时巡检任务
 
 ============================================================
 
-# 7. 企业级治理能力
+# 11. 核心原则
 
-HeliosGuard 可用于：
+HeliosGuard 的验证逻辑遵循：
 
-- GitLab CI 阻断机制
-- ArgoCD 同步前置校验
-- 夜间自愈任务
-- 集群健康评分系统
-- 多模块统一治理框架
-- 边缘节点远程合规审计
+- 命名标准化优先
+- 资源完整性优先
+- 健康状态优先
+- 阻断级问题绝不放行
 
 ============================================================
 
-# 8. 扩展方向
+# 12. 结论
 
-v5.0 规划能力：
+HeliosGuard 是 gitlab_ha_full_deploy.sh 的验证核心模块。
 
-- 统一组件治理框架
-- 合规评分系统（0–100）
-- HTML 可视化面板
-- 多环境集中管控
-- 多集群联邦审计
-- SaaS 平台化版本
+其职责仅限于：
 
-============================================================
+验证合规  
+输出等级  
+阻断风险  
 
-# 9. 核心结论
-
-HeliosGuard 不只是检测脚本。
-
-它是：
-
-企业级 Kubernetes 架构治理中枢。
-
-命名标准化
-= 自动化能力
-= DevOps 可持续能力
-= 企业规模化能力
+不负责业务执行。
 
 ============================================================
