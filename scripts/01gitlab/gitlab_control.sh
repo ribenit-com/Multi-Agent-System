@@ -1,10 +1,12 @@
 #!/bin/bash
 # ===================================================
-# GitLab HA 控制脚本（优化版）
+# GitLab HA 控制脚本（优化版 v1.1）
+# 最终修改日期：2026-02-21
 # 功能：
 #   - 每次下载最新 JSON 检测脚本和 HTML 报告生成脚本
+#   - 强制下载，每次都会覆盖本地脚本
 #   - 执行 JSON 检测
-#   - 轮询等待 JSON 文件生成（带 3 秒倒计时）
+#   - 轮询等待 JSON 文件生成（3 秒倒计时）
 #   - 实时显示 JSON 执行日志
 #   - Pod / PVC / Service / Namespace 异常统计
 #   - 生成 HTML 报告
@@ -12,9 +14,14 @@
 
 set -euo pipefail
 
+SCRIPT_VERSION="v1.1"
 MODULE_NAME="${1:-GitLab_HA}"
 WORK_DIR=$(mktemp -d)
-echo "🔹 工作目录: $WORK_DIR"
+echo -e "=============================="
+echo -e "🔹 执行 GitLab 控制脚本"
+echo -e "🔹 版本号: $SCRIPT_VERSION"
+echo -e "🔹 工作目录: $WORK_DIR"
+echo -e "=============================="
 
 # -------------------------
 # 下载远程脚本函数
@@ -22,7 +29,7 @@ echo "🔹 工作目录: $WORK_DIR"
 download_script() {
     local url="$1"
     local dest="$2"
-    echo "🔹 下载最新脚本: $url"
+    echo -e "🔹 强制下载最新脚本: $url"
     http_status=$(curl -s -o "$dest" -w "%{http_code}" "$url")
     if [[ "$http_status" -ne 200 ]]; then
         echo -e "\033[31m❌ 下载失败 (HTTP $http_status)：$url\033[0m"
@@ -55,7 +62,7 @@ JSON_LOG="$WORK_DIR/json_error.log"
 # -------------------------
 # 执行 JSON 脚本并轮询等待输出（带 3 秒倒计时）
 # -------------------------
-echo "🔹 执行 JSON 检测脚本..."
+echo -e "\n🔹 执行 JSON 检测脚本..."
 bash "$JSON_SCRIPT" > "$TMP_JSON" 2> "$JSON_LOG" &
 JSON_PID=$!
 
@@ -119,7 +126,7 @@ SVC_ISSUES=$(jq '[.[] | select(.resource_type=="Service" and .status!="存在")]
 # -------------------------
 # 生成 HTML 报告
 # -------------------------
-echo "🔹 生成 HTML 报告..."
+echo -e "\n🔹 生成 HTML 报告..."
 "$HTML_SCRIPT" "$MODULE_NAME" "$TMP_JSON"
 
 # -------------------------
@@ -128,4 +135,4 @@ echo "🔹 生成 HTML 报告..."
 rm -f "$TMP_JSON"
 rm -rf "$WORK_DIR"
 
-echo "✅ GitLab 控制脚本执行完成: 模块 = $MODULE_NAME"
+echo -e "\n✅ GitLab 控制脚本执行完成: 模块 = $MODULE_NAME, 版本 = $SCRIPT_VERSION"
