@@ -2,7 +2,7 @@
 set -euo pipefail
 
 #########################################
-# 脚本路径 & URL
+# 脚本路径 & Raw URL
 #########################################
 
 EXEC_SCRIPT="check_gitlab_names_json_UnitTest.sh"
