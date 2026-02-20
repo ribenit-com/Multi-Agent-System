@@ -1,11 +1,15 @@
 #!/bin/bash
-set -euo pipefail
+set -euxo pipefail
+# -e: 遇到错误立即退出
+# -u: 未定义变量报错
+# -x: 打印每条执行命令（深度调试）
+# -o pipefail: 管道失败也报错
 
 #########################################
-# GitLab YAML 生成脚本（生产级一体化 + 单测兼容版）
+# GitLab YAML 生成脚本（深度日志 + 单测兼容版）
 #########################################
 
-VERSION="v1.1.1"
+VERSION="v1.2.0"
 LAST_MODIFIED="2026-02-21"
 AUTHOR="zdl@cmaster01"
 
@@ -29,9 +33,6 @@ log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $msg"
 }
 
-#########################################
-# Header 输出
-#########################################
 log "===================================="
 log "📌 脚本: create_gitlab_yaml.sh"
 log "📌 版本: $VERSION"
@@ -53,17 +54,17 @@ write_file() {
 }
 
 #########################################
-# 生成 Namespace YAML
+# 生成 YAML 文件（生产级）
 #########################################
+
+# Namespace
 write_file "${MODULE}_namespace.yaml" \
 "apiVersion: v1
 kind: Namespace
 metadata:
   name: $NAMESPACE"
 
-#########################################
-# 生成 Secret YAML
-#########################################
+# Secret
 write_file "${MODULE}_secret.yaml" \
 "apiVersion: v1
 kind: Secret
@@ -74,9 +75,7 @@ type: Opaque
 stringData:
   root-password: \"secret123\""
 
-#########################################
-# 生成 StatefulSet + PVC YAML
-#########################################
+# StatefulSet + PVC
 write_file "${MODULE}_statefulset.yaml" \
 "apiVersion: apps/v1
 kind: StatefulSet
@@ -112,9 +111,7 @@ spec:
         requests:
           storage: $PVC_SIZE"
 
-#########################################
-# 生成 Service YAML
-#########################################
+# Service
 write_file "${MODULE}_service.yaml" \
 "apiVersion: v1
 kind: Service
@@ -136,9 +133,7 @@ spec:
     nodePort: $NODEPORT_REGISTRY
     name: registry"
 
-#########################################
-# 生成 CronJob YAML
-#########################################
+# CronJob
 write_file "${MODULE}_cronjob.yaml" \
 "apiVersion: batch/v1
 kind: CronJob
@@ -170,31 +165,38 @@ spec:
                 claimName: $SECRET"
 
 #########################################
-# 扫描 YAML 文件并生成 JSON
+# 扫描 YAML 文件，生成 JSON 并输出深度日志
 #########################################
+
 OUTPUT_JSON="$WORK_DIR/yaml_list.json"
 
+log "DEBUG: 扫描 YAML 文件..."
 yaml_files=()
 while IFS= read -r -d '' file; do
     yaml_files+=("$file")
 done < <(find "$WORK_DIR" -type f -name "*.yaml" -print0)
 
-# 打印整齐列表
+log "DEBUG: YAML 文件列表:\n$(printf '%s\n' "${yaml_files[@]}")"
+
+# 打印整齐列表（终端可见）
 echo "📄 当前生成 YAML 文件列表:"
 for f in "${yaml_files[@]}"; do
     echo " - $f"
 done
 
-# 输出 JSON 文件
+# 输出 JSON
 if command -v jq >/dev/null 2>&1; then
     json_array=$(printf '%s\n' "${yaml_files[@]}" | jq -R . | jq -s .)
     echo "$json_array" > "$OUTPUT_JSON"
     log "✅ JSON 文件已生成: $OUTPUT_JSON"
-    # 输出纯文本路径给单测（不带时间戳）
+
+    # ✅ 输出纯文本给单测（不带时间戳）
     echo "$OUTPUT_JSON"
+
+    # 深度日志：打印 JSON 内容
+    log "DEBUG: JSON 文件内容:\n$(cat "$OUTPUT_JSON")"
 else
     log "⚠️ jq 未安装，无法生成 JSON 文件"
-    # 兼容单测，可以输出空行避免报错
     echo ""
 fi
 
