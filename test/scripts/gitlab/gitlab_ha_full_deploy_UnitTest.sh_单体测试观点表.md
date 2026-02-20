@@ -30,6 +30,7 @@ chmod +x gitlab_ha_full_deploy_UnitTest.sh
 ```bash
 source ./check_gitlab_names_json.sh
 # GitLab HA 单体测试执行说明（含下载路径）
+```
 
 ## 1️⃣ 下载测试脚本
 
@@ -38,11 +39,9 @@ curl -L \
 https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/test/scripts/gitlab/gitlab_ha_full_deploy_UnitTest.sh \
 -o gitlab_ha_full_deploy_UnitTest.sh
 ```
-
 ---
 
 ## 2️⃣ 赋予执行权限
-
 ```bash
 chmod +x gitlab_ha_full_deploy_UnitTest.sh
 ```
@@ -65,19 +64,6 @@ chmod +x gitlab_ha_full_deploy_UnitTest.sh
 ✅ PASS
 🎉 All tests passed
 ```
-
-## 3️⃣ 返回结果是什么
-
-### 终端输出
-
-```text
-✅ PASS
-✅ PASS
-✅ PASS
-🎉 All tests passed
-```
-
----
 
 ### calculate_summary 返回值格式
 
