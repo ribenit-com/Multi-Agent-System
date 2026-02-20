@@ -1,7 +1,7 @@
 #!/bin/bash
 # ===================================================
-# check_postgres_names_html.sh v3.0
-# 功能：生成 HTML 报告（兼容 UT-01 ~ UT-08）
+# check_postgresql_names_html.sh v3.1
+# 功能：生成 HTML 报告
 # 参数：
 #   $1 = 模块名
 #   $2 = JSON 文件路径
@@ -75,7 +75,7 @@ EOF
 ln -sf "$OUTPUT_FILE" "$OUTPUT_DIR/latest.html"
 
 #########################################
-# 7️⃣ 输出成功信息（供 UT-08 检测）
+# 7️⃣ 输出成功信息
 #########################################
 
 echo "✅ HTML 报告生成完成: $OUTPUT_FILE"
