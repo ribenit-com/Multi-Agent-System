@@ -2,10 +2,10 @@
 set -euo pipefail
 
 #########################################
-# GitLab YAML 生成脚本（生产级一体化版）
+# GitLab YAML 生成脚本（生产级一体化 + 单测兼容版）
 #########################################
 
-VERSION="v1.1.0"
+VERSION="v1.1.1"
 LAST_MODIFIED="2026-02-21"
 AUTHOR="zdl@cmaster01"
 
@@ -22,7 +22,7 @@ NODEPORT_SSH="${10:-30022}"
 NODEPORT_HTTP="${11:-30080}"
 
 #########################################
-# 日志函数
+# 日志函数（带时间戳）
 #########################################
 log() {
     local msg="$1"
@@ -43,7 +43,7 @@ log "===================================="
 mkdir -p "$WORK_DIR"
 
 #########################################
-# 写文件函数（带日志和大小）
+# 写文件函数
 #########################################
 write_file() {
     local filename="$1"
@@ -170,7 +170,7 @@ spec:
                 claimName: $SECRET"
 
 #########################################
-# 扫描生成的 YAML 文件，生成 JSON
+# 扫描 YAML 文件并生成 JSON
 #########################################
 OUTPUT_JSON="$WORK_DIR/yaml_list.json"
 
@@ -189,9 +189,13 @@ done
 if command -v jq >/dev/null 2>&1; then
     json_array=$(printf '%s\n' "${yaml_files[@]}" | jq -R . | jq -s .)
     echo "$json_array" > "$OUTPUT_JSON"
-    log "✅ JSON 文件已生成，可供下一个脚本读取: $OUTPUT_JSON"
+    log "✅ JSON 文件已生成: $OUTPUT_JSON"
+    # 输出纯文本路径给单测（不带时间戳）
+    echo "$OUTPUT_JSON"
 else
     log "⚠️ jq 未安装，无法生成 JSON 文件"
+    # 兼容单测，可以输出空行避免报错
+    echo ""
 fi
 
 #########################################
