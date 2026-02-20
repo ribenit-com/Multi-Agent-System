@@ -1,10 +1,10 @@
 #!/bin/bash
 # ===================================================
-# GitLab HA 控制脚本（前台执行可见 v1.5）
+# GitLab HA 控制脚本（前台执行可见 v1.6）
 # 日期：2026-02-21
 # 功能：
 #   - 强制下载最新 JSON / HTML 脚本
-#   - 执行 JSON 检测（前台 + 实时输出）
+#   - 执行 JSON 检测（前台 + 实时输出，不再卡住）
 #   - 轮询 JSON 输出（倒计时显示）
 #   - 每条命令说明
 #   - 异常统计（Pod/PVC/Namespace/Service）
@@ -12,7 +12,7 @@
 # ===================================================
 
 set -euo pipefail
-SCRIPT_VERSION="v1.5"
+SCRIPT_VERSION="v1.6"
 MODULE_NAME="${1:-GitLab_HA}"
 WORK_DIR=$(mktemp -d)
 JSON_LOG="$WORK_DIR/json.log"
@@ -51,10 +51,11 @@ run curl -sSL "$HTML_SCRIPT_URL" -o "$HTML_SCRIPT"
 run chmod +x "$HTML_SCRIPT"
 
 # -------------------------
-# 执行 JSON 脚本（前台执行 + 实时输出）
+# 执行 JSON 脚本（前台执行 + 实时输出，不再卡住）
 # -------------------------
 echo -e "\n🔹 执行 JSON 检测脚本..."
-run bash "$JSON_SCRIPT" > >(tee -a "$TMP_JSON") 2> >(tee -a "$JSON_LOG" >&2)
+# stdout 写 TMP_JSON + 终端，stderr 写 JSON_LOG + 终端
+run bash "$JSON_SCRIPT" | tee -a "$TMP_JSON" 2> >(tee -a "$JSON_LOG" >&2)
 
 # -------------------------
 # 轮询等待 JSON 文件生成
