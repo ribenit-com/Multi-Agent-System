@@ -1,11 +1,32 @@
 #!/bin/bash
 set -e
 
-source ./check_gitlab_names_json.sh
+#########################################
+# 1️⃣ 自动下载被测试脚本
+#########################################
+
+TARGET_SCRIPT="check_gitlab_names_json.sh"
+
+if [ ! -f "$TARGET_SCRIPT" ]; then
+  echo "⬇️ Downloading target script..."
+
+  curl -L \
+  https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/01.gitlab%E5%AE%89%E8%A3%85%E5%8C%85/check_gitlab_names_json.sh \
+  -o "$TARGET_SCRIPT"
+
+  chmod +x "$TARGET_SCRIPT"
+fi
 
 #########################################
-# 极简断言
+# 2️⃣ 加载生产代码
 #########################################
+
+source ./"$TARGET_SCRIPT"
+
+#########################################
+# 3️⃣ 极简断言
+#########################################
+
 assert_equal() {
   expected="$1"
   actual="$2"
@@ -19,27 +40,24 @@ assert_equal() {
 }
 
 #########################################
-# mock kubectl
+# 4️⃣ mock kubectl
 #########################################
+
 mock_kctl() {
   case "$*" in
 
-    # UT-01 namespace 不存在
     "get ns ns-mid-storage-prod")
       return 1
       ;;
 
-    # UT-03 service 不存在
     *"get svc gitlab"*)
       return 1
       ;;
 
-    # UT-04 pvc 命名错误
     *"get pvc -o name"*)
       echo "pvc/badname"
       ;;
 
-    # UT-05 pod 非 Running
     *"get pods --no-headers"*)
       echo "gitlab-xxx 1/1 CrashLoopBackOff 3 1m"
       ;;
@@ -50,75 +68,51 @@ mock_kctl() {
   esac
 }
 
-#########################################
-# 覆盖 kctl
-#########################################
 kctl() {
   mock_kctl "$@"
 }
 
-########################################################
-# UT-01 namespace 不存在 => error
-########################################################
+#########################################
+# 5️⃣ UT-01 ~ UT-08
+#########################################
+
+# UT-01
 json_entries=()
 MODE="audit"
 check_namespace
-result=$(calculate_summary)
-assert_equal "error" "$result"
+assert_equal "error" "$(calculate_summary)"
 
-########################################################
-# UT-02 enforce 模式 => warning
-########################################################
+# UT-02
 json_entries=()
 MODE="enforce"
 check_namespace
-result=$(calculate_summary)
-assert_equal "warning" "$result"
+assert_equal "warning" "$(calculate_summary)"
 
-########################################################
-# UT-03 service 不存在 => error
-########################################################
+# UT-03
 json_entries=()
-MODE="audit"
 check_service
-result=$(calculate_summary)
-assert_equal "error" "$result"
+assert_equal "error" "$(calculate_summary)"
 
-########################################################
-# UT-04 pvc 命名不规范 => warning
-########################################################
+# UT-04
 json_entries=()
 check_pvc
-result=$(calculate_summary)
-assert_equal "warning" "$result"
+assert_equal "warning" "$(calculate_summary)"
 
-########################################################
-# UT-05 pod 非 Running => error
-########################################################
+# UT-05
 json_entries=()
 check_pod
-result=$(calculate_summary)
-assert_equal "error" "$result"
+assert_equal "error" "$(calculate_summary)"
 
-########################################################
-# UT-06 calculate_summary 有 error => error
-########################################################
+# UT-06
 json_entries=("error" "warning")
-result=$(calculate_summary)
-assert_equal "error" "$result"
+assert_equal "error" "$(calculate_summary)"
 
-########################################################
-# UT-07 calculate_summary 仅 warning => warning
-########################################################
+# UT-07
 json_entries=("warning" "warning")
-result=$(calculate_summary)
-assert_equal "warning" "$result"
+assert_equal "warning" "$(calculate_summary)"
 
-########################################################
-# UT-08 calculate_summary 无异常 => ok
-########################################################
+# UT-08
 json_entries=()
-result=$(calculate_summary)
-assert_equal "ok" "$result"
+assert_equal "ok" "$(calculate_summary)"
 
 echo "🎉 All tests passed"
