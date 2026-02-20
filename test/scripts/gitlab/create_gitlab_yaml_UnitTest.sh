@@ -2,16 +2,20 @@
 set -euo pipefail
 
 #########################################
-# GitLab YAML 生成脚本单元测试（生产级）
+# GitLab YAML 单元测试（固定输出目录版）
 #########################################
 
 EXEC_SCRIPT="gitlab_yaml_gen_UnitTest.sh"
-TARGET_SCRIPT="gitlab_yaml_gen.sh"
+TARGET_SCRIPT="create_gitlab_yaml.sh"  # 指向正确的脚本
 
 EXEC_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/test/scripts/gitlab/create_gitlab_yaml_UnitTest.sh"
 TARGET_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/01gitlab/create_gitlab_yaml.sh"
 
 VERSION="v1.0.1"   # 单元测试版本，可手动维护
+
+# 固定输出目录（和目标脚本保持一致）
+LOG_DIR="/mnt/truenas/Gitlab_yaml_output"
+MODULE="GitLab_Test"
 
 #########################################
 # Header 输出
@@ -25,6 +29,7 @@ log "======================================"
 log "📌 单元测试脚本: $EXEC_SCRIPT"
 log "📌 目标脚本: $TARGET_SCRIPT"
 log "📌 版本: $VERSION"
+log "📌 输出目录: $LOG_DIR"
 log "======================================"
 
 #########################################
@@ -52,59 +57,50 @@ assert_file_contains() { grep -q "$2" "$1" || fail "File $1 does not contain '$2
 assert_equal() { [[ "$1" == "$2" ]] || fail "expected=$1 actual=$2"; pass; }
 
 #########################################
-# 测试环境准备
-#########################################
-TEST_DIR=$(mktemp -d)
-MODULE="GitLab_Test"
-export HOME="$TEST_DIR"
-log "📂 测试临时目录: $TEST_DIR"
-
-#########################################
 # 运行目标脚本生成 YAML
-# 捕获输出以便日志分析
 #########################################
 log "▶️ 执行目标脚本生成 YAML..."
-OUTPUT=$(bash "$TARGET_SCRIPT" "$MODULE" "$TEST_DIR" "ns-test-gitlab" "sc-fast" "50Gi" "gitlab/gitlab-ce:15.0" "gitlab.test.local" "192.168.50.10" "35050" "30022" "30080" 2>&1)
+OUTPUT=$(bash "$TARGET_SCRIPT" 2>&1)
 echo "$OUTPUT"  # 打印完整日志以便追踪
 
 #########################################
-# UT 测试
+# UT 测试（固定目录版）
 #########################################
 
 # UT-04 Namespace YAML
-assert_file_exists "$TEST_DIR/${MODULE}_namespace.yaml"
-assert_file_contains "$TEST_DIR/${MODULE}_namespace.yaml" "apiVersion: v1"
-assert_file_contains "$TEST_DIR/${MODULE}_namespace.yaml" "name: ns-test-gitlab"
+assert_file_exists "$LOG_DIR/${MODULE}_namespace.yaml"
+assert_file_contains "$LOG_DIR/${MODULE}_namespace.yaml" "apiVersion: v1"
+assert_file_contains "$LOG_DIR/${MODULE}_namespace.yaml" "name: ns-test-gitlab"
 
 # UT-05 Secret YAML
-assert_file_exists "$TEST_DIR/${MODULE}_secret.yaml"
-assert_file_contains "$TEST_DIR/${MODULE}_secret.yaml" "root-password"
+assert_file_exists "$LOG_DIR/${MODULE}_secret.yaml"
+assert_file_contains "$LOG_DIR/${MODULE}_secret.yaml" "root-password"
 
 # UT-06 StatefulSet YAML
-assert_file_exists "$TEST_DIR/${MODULE}_statefulset.yaml"
-assert_file_contains "$TEST_DIR/${MODULE}_statefulset.yaml" "volumeClaimTemplates"
-assert_file_contains "$TEST_DIR/${MODULE}_statefulset.yaml" "GITLAB_OMNIBUS_CONFIG"
+assert_file_exists "$LOG_DIR/${MODULE}_statefulset.yaml"
+assert_file_contains "$LOG_DIR/${MODULE}_statefulset.yaml" "volumeClaimTemplates"
+assert_file_contains "$LOG_DIR/${MODULE}_statefulset.yaml" "GITLAB_OMNIBUS_CONFIG"
 
 # UT-07 Service YAML
-assert_file_exists "$TEST_DIR/${MODULE}_service.yaml"
-assert_file_contains "$TEST_DIR/${MODULE}_service.yaml" "nodePort: 30080"
-assert_file_contains "$TEST_DIR/${MODULE}_service.yaml" "nodePort: 30022"
-assert_file_contains "$TEST_DIR/${MODULE}_service.yaml" "nodePort: 35050"
+assert_file_exists "$LOG_DIR/${MODULE}_service.yaml"
+assert_file_contains "$LOG_DIR/${MODULE}_service.yaml" "nodePort: 30080"
+assert_file_contains "$LOG_DIR/${MODULE}_service.yaml" "nodePort: 30022"
+assert_file_contains "$LOG_DIR/${MODULE}_service.yaml" "nodePort: 35050"
 
 # UT-08 CronJob YAML
-assert_file_exists "$TEST_DIR/${MODULE}_cronjob.yaml"
-assert_file_contains "$TEST_DIR/${MODULE}_cronjob.yaml" "registry-garbage-collect"
-assert_file_contains "$TEST_DIR/${MODULE}_cronjob.yaml" "persistentVolumeClaim"
+assert_file_exists "$LOG_DIR/${MODULE}_cronjob.yaml"
+assert_file_contains "$LOG_DIR/${MODULE}_cronjob.yaml" "registry-garbage-collect"
+assert_file_contains "$LOG_DIR/${MODULE}_cronjob.yaml" "persistentVolumeClaim"
 
 # UT-09 YAML 格式验证（kubectl dry-run）
-kubectl apply --dry-run=client -f "$TEST_DIR/${MODULE}_namespace.yaml" >/dev/null 2>&1 && pass || fail "Namespace YAML invalid"
-kubectl apply --dry-run=client -f "$TEST_DIR/${MODULE}_secret.yaml" >/dev/null 2>&1 && pass || fail "Secret YAML invalid"
-kubectl apply --dry-run=client -f "$TEST_DIR/${MODULE}_statefulset.yaml" >/dev/null 2>&1 && pass || fail "StatefulSet YAML invalid"
-kubectl apply --dry-run=client -f "$TEST_DIR/${MODULE}_service.yaml" >/dev/null 2>&1 && pass || fail "Service YAML invalid"
-kubectl apply --dry-run=client -f "$TEST_DIR/${MODULE}_cronjob.yaml" >/dev/null 2>&1 && pass || fail "CronJob YAML invalid"
+kubectl apply --dry-run=client -f "$LOG_DIR/${MODULE}_namespace.yaml" >/dev/null 2>&1 && pass || fail "Namespace YAML invalid"
+kubectl apply --dry-run=client -f "$LOG_DIR/${MODULE}_secret.yaml" >/dev/null 2>&1 && pass || fail "Secret YAML invalid"
+kubectl apply --dry-run=client -f "$LOG_DIR/${MODULE}_statefulset.yaml" >/dev/null 2>&1 && pass || fail "StatefulSet YAML invalid"
+kubectl apply --dry-run=client -f "$LOG_DIR/${MODULE}_service.yaml" >/dev/null 2>&1 && pass || fail "Service YAML invalid"
+kubectl apply --dry-run=client -f "$LOG_DIR/${MODULE}_cronjob.yaml" >/dev/null 2>&1 && pass || fail "CronJob YAML invalid"
 
 # UT-10 输出提示（只匹配核心文本）
-EXPECTED_TEXT="GitLab YAML 已生成到 $TEST_DIR"
+EXPECTED_TEXT="✅ YAML / JSON / HTML 已生成在 $LOG_DIR"
 echo "$OUTPUT" | grep -q "$EXPECTED_TEXT" && pass || { 
     fail "Output missing expected text"
     echo "🔹 最近日志内容（用于调试）:"
