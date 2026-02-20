@@ -1,16 +1,20 @@
 #!/bin/bash
 set -euxo pipefail
+# -e: 遇到错误立即退出
+# -u: 未定义变量报错
+# -x: 打印每条执行命令（深度调试）
+# -o pipefail: 管道失败也报错
 
 #########################################
-# GitLab YAML 生成脚本（深度日志 + 错误预判版）
+# GitLab YAML 生成脚本（固定输出 + 深度日志 + 错误预判版）
 #########################################
 
-VERSION="v1.3.0"
+VERSION="v1.4.0"
 LAST_MODIFIED="2026-02-21"
 AUTHOR="zdl@cmaster01"
 
 MODULE="${1:-GitLab_Test}"            
-WORK_DIR="${2:-$(mktemp -d)}"         
+WORK_DIR="${2:-/tmp/gitlab_yaml_output}"   # 固定路径
 NAMESPACE="${3:-ns-test-gitlab}"      
 SECRET="${4:-sc-fast}"                
 PVC_SIZE="${5:-50Gi}"                 
@@ -21,6 +25,9 @@ NODEPORT_REGISTRY="${9:-35050}"
 NODEPORT_SSH="${10:-30022}"
 NODEPORT_HTTP="${11:-30080}"
 
+# -----------------
+# 日志函数（带时间戳）
+# -----------------
 log() {
     local msg="$1"
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $msg"
@@ -36,6 +43,9 @@ log "===================================="
 
 mkdir -p "$WORK_DIR"
 
+# -----------------
+# 写文件函数
+# -----------------
 write_file() {
     local filename="$1"
     local content="$2"
@@ -46,6 +56,7 @@ write_file() {
 # -----------------
 # 生成 YAML 文件
 # -----------------
+log "📌 开始生成 YAML 文件..."
 write_file "${MODULE}_namespace.yaml" \
 "apiVersion: v1
 kind: Namespace
@@ -149,20 +160,28 @@ spec:
                 claimName: $SECRET"
 
 # -----------------
-# 扫描 YAML，生成 JSON
+# 扫描 YAML 并生成 JSON
 # -----------------
 OUTPUT_JSON="$WORK_DIR/yaml_list.json"
-
+log "📌 开始扫描 YAML 文件..."
 yaml_files=()
 while IFS= read -r -d '' file; do
     yaml_files+=("$file")
 done < <(find "$WORK_DIR" -type f -name "*.yaml" -print0)
 
-echo "📄 当前生成 YAML 文件列表:"
+log "📌 YAML 文件扫描完成，总计 ${#yaml_files[@]} 个文件"
+
+# -----------------
+# 打印整齐列表（终端可见）
+# -----------------
+log "📄 当前生成 YAML 文件列表:"
 for f in "${yaml_files[@]}"; do
-    echo " - $f"
+    log "  $f (size=$(wc -c < "$f") bytes)"
 done
 
+# -----------------
+# 生成 JSON 文件
+# -----------------
 if command -v jq >/dev/null 2>&1; then
     json_array=$(printf '%s\n' "${yaml_files[@]}" | jq -R . | jq -s .)
     echo "$json_array" > "$OUTPUT_JSON"
@@ -172,7 +191,10 @@ if command -v jq >/dev/null 2>&1; then
     echo "$OUTPUT_JSON"
 
     # 深度日志：打印 JSON 内容
-    log "DEBUG: JSON 文件内容:\n$(cat "$OUTPUT_JSON")"
+    log "📄 JSON 文件内容:"
+    while IFS= read -r line; do
+        log "  $line"
+    done < "$OUTPUT_JSON"
 else
     log "⚠️ jq 未安装，无法生成 JSON 文件"
     echo ""
@@ -181,10 +203,10 @@ fi
 # -----------------
 # 错误预判日志
 # -----------------
-log "⚠️ 注意：如果出现 'Output missing expected text' 错误，可能原因如下："
-log "  1️⃣ 单测匹配的文本与时间戳日志不同，建议使用纯文本 JSON 路径"
-log "  2️⃣ YAML 文件名或 MODULE 前缀与单测预期不一致"
-log "  3️⃣ JSON 文件路径与单测预期路径不一致"
+log "⚠️ 注意：如果出现 'Output missing expected text' 错误，可能原因："
+log "  1️⃣ JSON 文件路径不固定，请使用固定 WORK_DIR"
+log "  2️⃣ 日志文本带时间戳或 \\n，单测匹配失败"
+log "  3️⃣ YAML 文件名或 MODULE 前缀与单测预期不一致"
 log "  4️⃣ CronJob / Secret / Namespace 等字段名称与单测期待值不匹配"
 log "  5️⃣ jq 未安装或 JSON 文件为空"
 
