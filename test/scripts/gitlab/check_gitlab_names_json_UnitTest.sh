@@ -2,29 +2,41 @@
 set -e
 
 #########################################
-# 1️⃣ 下载被测试脚本
+# 下载执行代码
+#########################################
+
+EXEC_SCRIPT="check_gitlab_names_json_UnitTest.sh"
+
+if [ ! -f "$EXEC_SCRIPT" ]; then
+  echo "⬇️ Downloading execution script..."
+  curl -f -L \
+    https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/test/scripts/gitlab/check_gitlab_names_json_UnitTest.sh \
+    -o "$EXEC_SCRIPT"
+  chmod +x "$EXEC_SCRIPT"
+fi
+
+#########################################
+# 下载被测试脚本
 #########################################
 
 TARGET_SCRIPT="check_gitlab_names_json.sh"
 
 if [ ! -f "$TARGET_SCRIPT" ]; then
   echo "⬇️ Downloading target script..."
-
   curl -f -L \
-  https://github.com/ribenit-com/Multi-Agent-System/blob/main/scripts/01.gitlab%E5%AE%89%E8%A3%85%E5%8C%85/check_gitlab_names_json.sh \
-  -o "$TARGET_SCRIPT"
-
+    https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/01.gitlab%E5%AE%89%E8%A3%85%E5%8C%85/check_gitlab_names_json.sh \
+    -o "$TARGET_SCRIPT"
   chmod +x "$TARGET_SCRIPT"
 fi
 
 #########################################
-# 2️⃣ 加载生产代码
+# 加载生产代码
 #########################################
 
 source ./"$TARGET_SCRIPT"
 
 #########################################
-# 3️⃣ 断言工具
+# 断言工具
 #########################################
 
 fail() {
@@ -62,7 +74,7 @@ assert_array_length() {
 }
 
 #########################################
-# 4️⃣ mock kubectl
+# mock kubectl
 #########################################
 
 mock_kctl() {
@@ -70,13 +82,13 @@ mock_kctl() {
     "get ns ns-mid-storage-prod")
       return 1
       ;;
-    *"get svc gitlab"*)
+    *"get svc gitlab"* )
       return 1
       ;;
-    *"get pvc -o name"*)
+    *"get pvc -o name"* )
       echo "pvc/badname"
       ;;
-    *"get pods --no-headers"*)
+    *"get pods --no-headers"* )
       echo "gitlab-xxx 1/1 CrashLoopBackOff 3 1m"
       ;;
     *)
@@ -90,7 +102,7 @@ kctl() {
 }
 
 #########################################
-# 5️⃣ UT-01 namespace audit → error
+# UT-01 namespace audit → error
 #########################################
 
 json_entries=()
@@ -102,7 +114,7 @@ assert_array_contains "error" "${json_entries[@]}"
 assert_equal "error" "$(calculate_summary)"
 
 #########################################
-# 6️⃣ UT-02 namespace enforce → warning
+# UT-02 namespace enforce → warning
 #########################################
 
 json_entries=()
@@ -114,7 +126,7 @@ assert_array_contains "warning" "${json_entries[@]}"
 assert_equal "warning" "$(calculate_summary)"
 
 #########################################
-# 7️⃣ UT-03 service 不存在 → error
+# UT-03 service 不存在 → error
 #########################################
 
 json_entries=()
@@ -124,7 +136,7 @@ assert_array_contains "error" "${json_entries[@]}"
 assert_equal "error" "$(calculate_summary)"
 
 #########################################
-# 8️⃣ UT-04 pvc 命名异常 → warning
+# UT-04 pvc 命名异常 → warning
 #########################################
 
 json_entries=()
@@ -134,7 +146,7 @@ assert_array_contains "warning" "${json_entries[@]}"
 assert_equal "warning" "$(calculate_summary)"
 
 #########################################
-# 9️⃣ UT-05 pod CrashLoop → error
+# UT-05 pod CrashLoop → error
 #########################################
 
 json_entries=()
@@ -144,21 +156,21 @@ assert_array_contains "error" "${json_entries[@]}"
 assert_equal "error" "$(calculate_summary)"
 
 #########################################
-# 🔟 UT-06 summary 有 error → error
+# UT-06 summary 有 error → error
 #########################################
 
 json_entries=("error" "warning")
 assert_equal "error" "$(calculate_summary)"
 
 #########################################
-# 1️⃣1️⃣ UT-07 仅 warning → warning
+# UT-07 仅 warning → warning
 #########################################
 
 json_entries=("warning" "warning")
 assert_equal "warning" "$(calculate_summary)"
 
 #########################################
-# 1️⃣2️⃣ UT-08 无异常 → ok
+# UT-08 无异常 → ok
 #########################################
 
 json_entries=()
