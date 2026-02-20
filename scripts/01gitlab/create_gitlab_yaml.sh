@@ -1,88 +1,190 @@
 #!/bin/bash
-set -euxo pipefail
-# e: 出错立即退出
-# u: 未定义变量报错
-# x: 打印执行的每条命令
-# o pipefail: 管道命令失败时也报错
+# ===================================================
+# 多模块 Kubernetes YAML + JSON + HTML 一体化生成脚本
+# 功能：
+#   1️⃣ 支持任意模块 (PostgreSQL / Redis / GitLab 等)
+#   2️⃣ 生成 Namespace / Secret / StatefulSet / Service / CronJob YAML
+#   3️⃣ 输出 JSON 文件记录 YAML 列表
+#   4️⃣ 输出 HTML 文件供共享盘 RGA/智能读取
+#   5️⃣ 后台日志详尽，终端只显示关键信息
+# ===================================================
 
-#########################################
-# 配置区
-#########################################
-MODULE="${1:-GitLab_Test}"          # YAML 前缀
-WORK_DIR="${2:-/tmp/gitlab_yaml_output}"  # 默认工作目录（固定路径方便单测）
-LOG_DIR="/mnt/truenas"              # 日志与 HTML 输出目录
-HTML_FILE="${LOG_DIR}/redis_ha_info.html"
-NAMESPACE="${3:-ns-test-gitlab}"    # Kubernetes Namespace
-SECRET="${4:-sc-fast}"              # Secret 名称
-PVC_SIZE="${5:-50Gi}"               # PVC 容量
-IMAGE="${6:-gitlab/gitlab-ce:15.0}" # GitLab 镜像
-DOMAIN="${7:-gitlab.test.local}"    # 外部访问域名
-IP="${8:-192.168.50.10}"            # 节点 IP
-NODEPORT_REGISTRY="${9:-35050}"
-NODEPORT_SSH="${10:-30022}"
-NODEPORT_HTTP="${11:-30080}"
+set -euo pipefail
 
-# 固定 JSON 文件路径
-OUTPUT_JSON="$WORK_DIR/yaml_list.json"
+# -----------------------------
+# 配置参数（可修改）
+# -----------------------------
+MODULE="${1:-PostgreSQL_HA}"   # 模块名
+WORK_DIR="/tmp/${MODULE}_work"
+LOG_DIR="/mnt/truenas"
+HTML_FILE="${LOG_DIR}/${MODULE}_info.html"
+JSON_FILE="${WORK_DIR}/yaml_list.json"
 
-#########################################
+# 模块特定配置
+case "$MODULE" in
+  PostgreSQL_HA)
+    NAMESPACE="ns-postgres-ha"
+    SECRET="pg-secret"
+    PVC_SIZE="50Gi"
+    IMAGE="postgres:16"
+    NODEPORT_HTTP=30010
+    NODEPORT_DB=30011
+    ;;
+  Redis_HA)
+    NAMESPACE="ns-redis-ha"
+    SECRET="redis-secret"
+    PVC_SIZE="20Gi"
+    IMAGE="redis:7"
+    NODEPORT_HTTP=30020
+    NODEPORT_REDIS=30021
+    ;;
+  GitLab_Test)
+    NAMESPACE="ns-gitlab-test"
+    SECRET="sc-fast"
+    PVC_SIZE="50Gi"
+    IMAGE="gitlab/gitlab-ce:15.0"
+    NODEPORT_HTTP=30080
+    NODEPORT_SSH=30022
+    NODEPORT_REGISTRY=35050
+    ;;
+  *)
+    echo "❌ 未知模块: $MODULE"
+    exit 1
+    ;;
+esac
+
+mkdir -p "$WORK_DIR" "$LOG_DIR"
+
+# -----------------------------
 # 日志函数
-# 带时间戳，保证每条日志可追踪
-#########################################
-log() {
+# -----------------------------
+log_file() { 
+    # 详尽日志写共享盘
     local msg="$1"
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $msg"
+    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $msg" >> "${LOG_DIR}/${MODULE}_full.log"
 }
 
-#########################################
-# 创建工作目录和日志目录
-#########################################
-mkdir -p "$WORK_DIR"
-mkdir -p "$LOG_DIR"
+log_console() { 
+    # 终端只显示关键提示
+    local msg="$1"
+    echo "$msg"
+}
 
-log "📌 开始生成 GitLab YAML 与 JSON，工作目录: $WORK_DIR"
-log "📌 日志目录: $LOG_DIR"
-
-#########################################
-# 写文件函数
-# 功能: 输出文件 + 打印日志 + 文件大小
-#########################################
-write_file() {
+# -----------------------------
+# 写 YAML 文件函数
+# -----------------------------
+write_yaml() {
     local filename="$1"
     local content="$2"
-    echo "$content" > "$WORK_DIR/$filename"
-    log "📦 已生成 $filename (size=$(wc -c < "$WORK_DIR/$filename") bytes)"
+    echo "$content" > "${WORK_DIR}/${filename}"
+    log_file "生成 ${filename} (size=$(wc -c < ${WORK_DIR}/${filename}) bytes)"
 }
 
-#########################################
-# 1️⃣ 生成 YAML 文件
-#########################################
+# -----------------------------
+# 生成 YAML 文件
+# -----------------------------
+log_console "📌 开始生成 $MODULE YAML 文件..."
+log_file "开始生成 $MODULE YAML 文件，工作目录: ${WORK_DIR}"
 
-log "📌 生成 Namespace YAML"
-write_file "${MODULE}_namespace.yaml" \
+# Namespace
+write_yaml "${MODULE}_namespace.yaml" \
 "apiVersion: v1
 kind: Namespace
 metadata:
-  name: $NAMESPACE"
+  name: ${NAMESPACE}"
 
-log "📌 生成 Secret YAML"
-write_file "${MODULE}_secret.yaml" \
+# Secret
+write_yaml "${MODULE}_secret.yaml" \
 "apiVersion: v1
 kind: Secret
 metadata:
-  name: $SECRET
-  namespace: $NAMESPACE
+  name: ${SECRET}
+  namespace: ${NAMESPACE}
 type: Opaque
 stringData:
-  root-password: \"secret123\""
+  password: 'secret123'"
 
-log "📌 生成 StatefulSet YAML"
-write_file "${MODULE}_statefulset.yaml" \
+# StatefulSet
+case "$MODULE" in
+  PostgreSQL_HA)
+    write_yaml "${MODULE}_statefulset.yaml" \
+"apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+  namespace: ${NAMESPACE}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: postgres
+  serviceName: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: ${IMAGE}
+        env:
+        - name: POSTGRES_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: ${SECRET}
+              key: password
+        volumeMounts:
+        - name: pg-data
+          mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+  - metadata:
+      name: pg-data
+    spec:
+      accessModes: [ 'ReadWriteOnce' ]
+      resources:
+        requests:
+          storage: ${PVC_SIZE}"
+    ;;
+  Redis_HA)
+    write_yaml "${MODULE}_statefulset.yaml" \
+"apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: redis
+  namespace: ${NAMESPACE}
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: redis
+  serviceName: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+      - name: redis
+        image: ${IMAGE}
+        volumeMounts:
+        - name: redis-data
+          mountPath: /data
+  volumeClaimTemplates:
+  - metadata:
+      name: redis-data
+    spec:
+      accessModes: [ 'ReadWriteOnce' ]
+      resources:
+        requests:
+          storage: ${PVC_SIZE}"
+    ;;
+  GitLab_Test)
+    write_yaml "${MODULE}_statefulset.yaml" \
 "apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: gitlab
-  namespace: $NAMESPACE
+  namespace: ${NAMESPACE}
 spec:
   replicas: 1
   selector:
@@ -96,10 +198,10 @@ spec:
     spec:
       containers:
       - name: gitlab
-        image: $IMAGE
+        image: ${IMAGE}
         env:
         - name: GITLAB_OMNIBUS_CONFIG
-          value: 'external_url \"http://$DOMAIN\"'
+          value: 'external_url \"http://gitlab.test.local\"'
         volumeMounts:
         - name: gitlab-data
           mountPath: /var/opt/gitlab
@@ -107,42 +209,86 @@ spec:
   - metadata:
       name: gitlab-data
     spec:
-      accessModes: [ \"ReadWriteOnce\" ]
+      accessModes: [ 'ReadWriteOnce' ]
       resources:
         requests:
-          storage: $PVC_SIZE"
+          storage: ${PVC_SIZE}"
+    ;;
+esac
 
-log "📌 生成 Service YAML"
-write_file "${MODULE}_service.yaml" \
+# Service
+case "$MODULE" in
+  PostgreSQL_HA)
+    write_yaml "${MODULE}_service.yaml" \
+"apiVersion: v1
+kind: Service
+metadata:
+  name: postgres-service
+  namespace: ${NAMESPACE}
+spec:
+  type: NodePort
+  selector:
+    app: postgres
+  ports:
+  - port: 5432
+    nodePort: ${NODEPORT_DB}
+    name: postgres
+  - port: 80
+    nodePort: ${NODEPORT_HTTP}
+    name: http"
+    ;;
+  Redis_HA)
+    write_yaml "${MODULE}_service.yaml" \
+"apiVersion: v1
+kind: Service
+metadata:
+  name: redis-service
+  namespace: ${NAMESPACE}
+spec:
+  type: NodePort
+  selector:
+    app: redis
+  ports:
+  - port: 6379
+    nodePort: ${NODEPORT_REDIS}
+    name: redis
+  - port: 80
+    nodePort: ${NODEPORT_HTTP}
+    name: http"
+    ;;
+  GitLab_Test)
+    write_yaml "${MODULE}_service.yaml" \
 "apiVersion: v1
 kind: Service
 metadata:
   name: gitlab-service
-  namespace: $NAMESPACE
+  namespace: ${NAMESPACE}
 spec:
   type: NodePort
   selector:
     app: gitlab
   ports:
   - port: 22
-    nodePort: $NODEPORT_SSH
+    nodePort: ${NODEPORT_SSH}
     name: ssh
   - port: 80
-    nodePort: $NODEPORT_HTTP
+    nodePort: ${NODEPORT_HTTP}
     name: http
   - port: 5005
-    nodePort: $NODEPORT_REGISTRY
+    nodePort: ${NODEPORT_REGISTRY}
     name: registry"
+    ;;
+esac
 
-log "📌 生成 CronJob YAML"
-write_file "${MODULE}_cronjob.yaml" \
+# CronJob（通用示例）
+write_yaml "${MODULE}_cronjob.yaml" \
 "apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: gitlab-backup
-  namespace: $NAMESPACE
+  name: ${MODULE}-backup
+  namespace: ${NAMESPACE}
 spec:
-  schedule: \"0 2 * * *\"
+  schedule: '0 2 * * *'
   jobTemplate:
     spec:
       template:
@@ -153,93 +299,37 @@ spec:
             command:
               - /bin/sh
               - -c
-              - |
-                echo '执行 GitLab registry-garbage-collect'
-                registry-garbage-collect /var/opt/gitlab/gitlab-rails/etc/gitlab.yml
-            volumeMounts:
-              - name: gitlab-data
-                mountPath: /var/opt/gitlab
-          restartPolicy: OnFailure
-          volumes:
-            - name: gitlab-data
-              persistentVolumeClaim:
-                claimName: $SECRET"
+              - 'echo Executing backup task'
+          restartPolicy: OnFailure"
 
-#########################################
-# 2️⃣ 扫描 YAML 文件，生成 JSON 文件
-#########################################
-
-log "📌 扫描 YAML 文件..."
-yaml_files=()
-while IFS= read -r -d '' file; do
-    yaml_files+=("$file")
-done < <(find "$WORK_DIR" -type f -name "*.yaml" -print0)
-
-log "📌 YAML 文件扫描完成，总计 ${#yaml_files[@]} 个文件"
-
-# -----------------
-# 打印 YAML 文件列表 + 文件大小
-# -----------------
-log "📄 当前生成 YAML 文件列表:"
-for f in "${yaml_files[@]}"; do
-    log "  $f (size=$(wc -c < "$f") bytes)"
-done
-
-# -----------------
+# -----------------------------
 # 生成 JSON 文件
-# -----------------
-if command -v jq >/dev/null 2>&1; then
-    json_array=$(printf '%s\n' "${yaml_files[@]}" | jq -R . | jq -s .)
-    echo "$json_array" > "$OUTPUT_JSON"
-    log "✅ JSON 文件已生成: $OUTPUT_JSON"
+# -----------------------------
+yaml_files=("${WORK_DIR}/"*.yaml)
+printf '%s\n' "${yaml_files[@]}" | jq -R . | jq -s . > "$JSON_FILE"
+log_file "生成 JSON 文件: $JSON_FILE"
 
-    # 单测兼容: 纯文本输出 JSON 路径
-    echo "$OUTPUT_JSON"
-
-    # 深度日志: JSON 内容逐行打印
-    log "📄 JSON 文件内容:"
-    while IFS= read -r line; do
-        log "  $line"
-    done < "$OUTPUT_JSON"
-else
-    log "⚠️ jq 未安装，无法生成 JSON 文件"
-fi
-
-#########################################
-# 3️⃣ 生成 HTML 文件
-# HTML 用于 RGA 智能读取服务器状态
-#########################################
-
-log "📌 生成 HTML 文件: $HTML_FILE"
+# -----------------------------
+# 生成 HTML 文件
+# -----------------------------
 {
-echo "<html><head><title>GitLab YAML & JSON 状态</title></head><body>"
+echo "<html><head><title>$MODULE 状态</title></head><body>"
 echo "<h2>生成时间: $(date '+%Y-%m-%d %H:%M:%S')</h2>"
 echo "<h3>工作目录: $WORK_DIR</h3>"
-echo "<h3>JSON 文件: $OUTPUT_JSON</h3>"
+echo "<h3>JSON 文件: $JSON_FILE</h3>"
 echo "<h3>YAML 文件列表:</h3>"
 echo "<ul>"
 for f in "${yaml_files[@]}"; do
     size=$(wc -c < "$f")
-    echo "<li>$f (size=${size} bytes)</li>"
+    echo "<li>${f} (size=${size} bytes)</li>"
 done
 echo "</ul>"
 echo "<h3>JSON 内容:</h3>"
 echo "<pre>"
-cat "$OUTPUT_JSON"
+cat "$JSON_FILE"
 echo "</pre>"
 echo "</body></html>"
 } > "$HTML_FILE"
 
-log "✅ HTML 文件已生成，可供 RGA 或智能系统读取: $HTML_FILE"
-
-#########################################
-# 4️⃣ 错误预判日志
-#########################################
-log "⚠️ 注意：如果单测报 'Output missing expected text'，可能原因如下："
-log "  1️⃣ JSON 文件路径不固定，请使用固定 WORK_DIR"
-log "  2️⃣ 日志文本带时间戳或 \\n，单测匹配失败"
-log "  3️⃣ YAML 文件名或 MODULE 前缀与单测预期不一致"
-log "  4️⃣ CronJob / Secret / Namespace 等字段名称与单测期待值不匹配"
-log "  5️⃣ jq 未安装或 JSON 文件为空"
-
-log "✅ GitLab YAML 一体化 + JSON + HTML 完成！"
+log_console "✅ $MODULE YAML + JSON + HTML 已生成"
+log_file "生成 HTML 文件: $HTML_FILE"
