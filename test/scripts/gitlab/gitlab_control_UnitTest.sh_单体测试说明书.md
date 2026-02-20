@@ -1,15 +1,16 @@
-# 🧪 gitlab_control_UnitTest.sh 控制脚本 单体测试说明书
+# 🧪 GitLab HA 控制脚本 单体测试说明书
 
-**版本**：v1.0 | **更新日期**：2026-02-20
-**模块**：GitLab HA
-**类型**：控制脚本
-**测试性质**：自动下载检测脚本、执行巡检、生成 HTML 报告
+| 字段 | 内容 |
+| :-- | :-- |
+| 版本 | v1.0 |
+| 更新日期 | 2026-02-20 |
+| 模块 | GitLab HA |
+| 类型 | 控制脚本 |
+| 测试性质 | 自动下载检测脚本、执行巡检、生成 HTML 报告 |
 
 ---
 
 ## 一、🎯 测试范围与观点表
-
-下表定义了被测脚本的核心检测点及对应的单体测试验证场景。
 
 | 编号 | 函数/检测点 | 场景描述 | 期望结果 |
 | :-- | :-- | :-- | :-- |
@@ -21,7 +22,7 @@
 | **UT-06** | Pod 异常统计 | JSON 数据中包含异常 Pod | 正确统计异常 Pod 数量并输出红色警告 ⚠️ |
 | **UT-07** | PVC 异常统计 | JSON 数据中包含异常 PVC | 正确统计异常 PVC 数量并输出黄色警告 ⚠️ |
 | **UT-08** | HTML 报告生成 | JSON 中间文件存在 | 调用 HTML 脚本生成最终报告 |
-| **UT-09** | 临時文件清理 | 脚本执行结束 | `TMP_JSON` 与临时工作目录被删除 ✅ |
+| **UT-09** | 临时文件清理 | 脚本执行结束 | `TMP_JSON` 与临时工作目录被删除 ✅ |
 | **UT-10** | 终端输出提示 | 执行完成 | 控制台输出完成信息与最终结果 |
 
 ---
@@ -29,8 +30,6 @@
 ## 二、⚙️ 测试执行指南
 
 ### 1. 环境准备
-
-在测试环境中执行以下命令，准备被测脚本、测试框架及模拟数据。
 
 #### 1.1 下载被测控制脚本
 
@@ -46,7 +45,7 @@ curl -L "https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/h
 chmod +x gitlab_control_UnitTest.sh
 ```
 
-#### 1.3 准备模拟 JSON 数据（用于测试异常检测）
+#### 1.3 准备模拟 JSON 数据
 
 ```bash
 cat <<EOF > test.json
@@ -56,8 +55,6 @@ cat <<EOF > test.json
 ]
 EOF
 ```
-
----
 
 ### 2. 执行测试
 
@@ -73,11 +70,7 @@ EOF
 ./gitlab_control.sh PostgreSQL_HA
 ```
 
----
-
 ### 3. 预期控制台输出
-
-执行成功后，终端应显示类似以下信息：
 
 ```text
 🔹 工作目录: /tmp/tmp.xxxxxx
@@ -91,21 +84,17 @@ EOF
 🎉 All tests passed (enterprise-level v3)
 ```
 
----
-
 ### 4. 验证中间文件生成
-
-测试过程中，临时目录下应存在以下文件：
 
 ```bash
 ls -l /tmp/tmp.*/
 ```
 
-期望文件列表：
-
-- `check_postgres_names_json.sh`（下载的 JSON 检测脚本）
-- `check_postgres_names_html.sh`（下载的 HTML 报告脚本）
-- `tmp.json`（生成的中间 JSON 数据）
+| 文件名 | 说明 |
+| :-- | :-- |
+| `check_postgres_names_json.sh` | 下载的 JSON 检测脚本 |
+| `check_postgres_names_html.sh` | 下载的 HTML 报告脚本 |
+| `tmp.json` | 生成的中间 JSON 数据 |
 
 ---
 
@@ -117,9 +106,11 @@ ls -l /tmp/tmp.*/
 
 ### 断言策略
 
-- **assert_equal**：校验模块名、命令返回值等状态码。
-- **assert_file_exists**：确认关键脚本与报告文件已生成。
-- **assert_file_contains**：验证 HTML 报告内容中是否包含预期的 JSON 数据结构。
+| 断言方法 | 用途 |
+| :-- | :-- |
+| `assert_equal` | 校验模块名、命令返回值等状态码 |
+| `assert_file_exists` | 确认关键脚本与报告文件已生成 |
+| `assert_file_contains` | 验证 HTML 报告内容中是否包含预期的 JSON 数据结构 |
 
 ---
 
@@ -136,8 +127,7 @@ ls -l /tmp/tmp.*/
 
 ## 五、📌 结论
 
-本测试方案对 `gitlab_control.sh` 在 **GitLab HA 环境** 下的自动下载、异常检测、统计聚合、报告生成及资源清理的全流程进行了全面验证。
-测试覆盖了正常路径与关键异常路径，符合企业级脚本交付标准，确保了脚本在生产部署中的可靠性与可观测性。
+本测试方案对 `gitlab_control.sh` 在 **GitLab HA 环境**下的自动下载、异常检测、统计聚合、报告生成及资源清理的全流程进行了全面验证。测试覆盖了正常路径与关键异常路径，符合企业级脚本交付标准，确保了脚本在生产部署中的可靠性与可观测性。
 
 ---
 
