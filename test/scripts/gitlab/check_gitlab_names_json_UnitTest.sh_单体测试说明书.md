@@ -29,14 +29,14 @@
 
 ```bash
 curl -L \
-  https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/test/scripts/gitlab/gitlab_ha_full_deploy_UnitTest.sh \
-  -o gitlab_ha_full_deploy_UnitTest.sh
+  https://github.com/ribenit-com/Multi-Agent-System/blob/main/test/scripts/gitlab/check_gitlab_names_json_UnitTest.sh \
+  -o check_gitlab_names_json_UnitTest.sh
 ```
 
 2. 赋予执行权限：
 
 ```bash
-chmod +x gitlab_ha_full_deploy_UnitTest.sh
+chmod +x check_gitlab_names_json_UnitTest.sh
 ```
 
 ---
@@ -44,7 +44,7 @@ chmod +x gitlab_ha_full_deploy_UnitTest.sh
 ## 2️⃣ 执行测试
 
 ```bash
-./gitlab_ha_full_deploy_UnitTest.sh
+./check_gitlab_names_json_UnitTest.sh
 ```
 
 ---
