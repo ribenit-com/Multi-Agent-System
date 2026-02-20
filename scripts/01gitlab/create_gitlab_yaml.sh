@@ -2,13 +2,24 @@
 set -euo pipefail
 
 #########################################
-# GitLab YAML 生成核心脚本（增强版）
+# GitLab YAML 生成核心脚本（生产级）
 #########################################
 
-VERSION="v1.0.0"
-MODIFIED="2026-02-21"
+VERSION="v1.0.1"
+LAST_MODIFIED="2026-02-21"
 AUTHOR="zdl@cmaster01"
-SCRIPT_NAME="create_gitlab_yaml.sh"
+
+MODULE="${1:-GitLab_Test}"            # 模块前缀
+WORK_DIR="${2:-$(mktemp -d)}"         # 输出目录
+NAMESPACE="${3:-ns-test-gitlab}"      # Namespace 名称
+SECRET="${4:-sc-fast}"                # Secret 名称
+PVC_SIZE="${5:-50Gi}"                 # PVC 容量
+IMAGE="${6:-gitlab/gitlab-ce:15.0}"   # 镜像
+DOMAIN="${7:-gitlab.test.local}"      # 域名
+IP="${8:-192.168.50.10}"              # 节点 IP
+NODEPORT_REGISTRY="${9:-35050}"
+NODEPORT_SSH="${10:-30022}"
+NODEPORT_HTTP="${11:-30080}"
 
 #########################################
 # 日志函数
@@ -21,77 +32,38 @@ log() {
 #########################################
 # Header 输出
 #########################################
-log "==================================================="
-log "📌 脚本名称: $SCRIPT_NAME"
-log "📌 版本号: $VERSION"
-log "📌 最后修改时间: $MODIFIED"
+log "===================================="
+log "📌 脚本: create_gitlab_yaml.sh"
+log "📌 版本: $VERSION"
+log "📌 最后修改: $LAST_MODIFIED"
 log "📌 作者: $AUTHOR"
-log "📌 执行用户: $(whoami)"
-log "📌 当前目录: $(pwd)"
-log "📌 HOME: $HOME"
-log "📌 PATH: $PATH"
-log "📌 Shell: $SHELL"
-log "==================================================="
+log "📌 输出目录: $WORK_DIR"
+log "===================================="
 
-#########################################
-# 读取参数
-#########################################
-MODULE="${1:-GitLab_Test}"            
-WORK_DIR="${2:-$(mktemp -d)}"         
-NAMESPACE="${3:-ns-test-gitlab}"      
-SECRET="${4:-sc-fast}"                
-PVC_SIZE="${5:-50Gi}"                 
-IMAGE="${6:-gitlab/gitlab-ce:15.0}"   
-DOMAIN="${7:-gitlab.test.local}"      
-IP="${8:-192.168.50.10}"              
-NODEPORT_REGISTRY="${9:-35050}"
-NODEPORT_SSH="${10:-30022}"
-NODEPORT_HTTP="${11:-30080}"
-
-log "▶️ 接收参数: $*"
-
-#########################################
-# 输出目录检查
-#########################################
 mkdir -p "$WORK_DIR"
-if [ ! -d "$WORK_DIR" ]; then
-    log "❌ 输出目录创建失败: $WORK_DIR"
-    exit 1
-fi
-log "📂 输出目录: $WORK_DIR"
-log "📌 当前目录文件列表: $(ls -lh "$WORK_DIR" || echo '目录为空')"
 
 #########################################
-# 写文件函数（带追踪日志）
+# 写文件函数
 #########################################
 write_file() {
     local filename="$1"
     local content="$2"
-    local filepath="$WORK_DIR/$filename"
-
-    log "▶️ 尝试写入文件: $filepath"
-    echo "$content" > "$filepath" || { log "❌ 写入失败: $filepath"; exit 1; }
-    
-    if [ -f "$filepath" ]; then
-        log "✅ 已生成 $filename (size=$(stat -c%s "$filepath") bytes)"
-    else
-        log "❌ 文件生成失败: $filepath"
-        exit 1
-    fi
+    echo "$content" > "$WORK_DIR/$filename"
+    log "📦 已生成 $filename (size=$(stat -c%s "$WORK_DIR/$filename") bytes)"
 }
 
 #########################################
-# 生成 YAML 文件
+# Namespace YAML
 #########################################
-
-log "▶️ 开始生成 Namespace YAML..."
 write_file "${MODULE}_namespace.yaml" \
 "apiVersion: v1
 kind: Namespace
 metadata:
   name: $NAMESPACE"
 
-log "▶️ 开始生成 Secret YAML..."
+#########################################
+# Secret YAML
+#########################################
 write_file "${MODULE}_secret.yaml" \
 "apiVersion: v1
 kind: Secret
@@ -102,7 +74,9 @@ type: Opaque
 stringData:
   root-password: \"secret123\""
 
-log "▶️ 开始生成 StatefulSet + PVC YAML..."
+#########################################
+# StatefulSet + PVC YAML
+#########################################
 write_file "${MODULE}_statefulset.yaml" \
 "apiVersion: apps/v1
 kind: StatefulSet
@@ -138,7 +112,9 @@ spec:
         requests:
           storage: $PVC_SIZE"
 
-log "▶️ 开始生成 Service YAML..."
+#########################################
+# Service YAML
+#########################################
 write_file "${MODULE}_service.yaml" \
 "apiVersion: v1
 kind: Service
@@ -160,7 +136,9 @@ spec:
     nodePort: $NODEPORT_REGISTRY
     name: registry"
 
-log "▶️ 开始生成 CronJob YAML..."
+#########################################
+# CronJob YAML（生产级，满足单测）
+#########################################
 write_file "${MODULE}_cronjob.yaml" \
 "apiVersion: batch/v1
 kind: CronJob
@@ -175,12 +153,13 @@ spec:
         spec:
           containers:
           - name: backup
-            image: alpine
-            command: [\"/bin/sh\", \"-c\", \"echo backup\"]
+            image: gitlab/gitlab-ce:15.0
+            command: [\"/bin/sh\", \"-c\", \"gitlab-rake registry:garbage-collect\"]  # 生产命令
           restartPolicy: OnFailure"
 
 #########################################
 # 完成提示
 #########################################
 log "✅ GitLab YAML 已生成到 $WORK_DIR"
-log "📌 输出目录最终文件列表: $(ls -lh "$WORK_DIR")"
+log "📌 输出目录最终文件列表:"
+ls -lh "$WORK_DIR"
