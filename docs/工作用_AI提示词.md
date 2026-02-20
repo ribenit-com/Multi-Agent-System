@@ -1,6 +1,8 @@
 # MarkDown
 ``` 给我MarkDown, 纯文本格式代码块，一下子可以COPY的那一种```
 
+```强制每次执行下载最新脚本 Header要输出版本号```
+
 # Git
 ```
 https://github.com/ribenit-com/Multi-Agent-System/blob/main/Helm/setup_Redis_local.sh
