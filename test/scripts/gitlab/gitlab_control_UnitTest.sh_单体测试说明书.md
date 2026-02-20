@@ -36,8 +36,8 @@
 
 ```bash
 curl -L "https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/test/scripts/gitlab/gitlab_control_UnitTest.sh" \
-  -o check_gitlab_names_json_UnitTest.sh
-chmod +x check_gitlab_names_json_UnitTest.sh
+  -o gitlab_control_UnitTest.sh
+chmod +x gitlab_control_UnitTest.sh
 ```
 
 #### 1.2 准备模拟 JSON 数据
