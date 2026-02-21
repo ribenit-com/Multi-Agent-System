@@ -1,33 +1,45 @@
 #!/bin/bash
 # ===================================================
-# GitLab -> ArgoCD 部署脚本（方案1修正版）
+# GitLab -> ArgoCD 部署脚本（自更新 + 版本号管理）
+# 版本: v1.0.0
+# 自动下载最新部署脚本，每次执行保证最新
 # ===================================================
 set -euo pipefail
 
+# -----------------------------
+# 配置变量
+# -----------------------------
+DEPLOY_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/scripts/01gitlab/deploy_gitlab_to_argocd_.sh"
+TMP_SCRIPT=$(mktemp)
+CURRENT_SCRIPT="$0"
+
 ARGO_APP="${ARGO_APP:-gitlab}"
-ARGO_NAMESPACE="${ARGO_NAMESPACE:-argocd}"    # ArgoCD Application 所在 namespace
-DEPLOY_NAMESPACE="${DEPLOY_NAMESPACE:-gitlab}" # GitLab Deployment/Service namespace
+ARGO_NAMESPACE="${ARGO_NAMESPACE:-argocd}"
+DEPLOY_NAMESPACE="${DEPLOY_NAMESPACE:-gitlab}"
 TIMEOUT="${TIMEOUT:-300}"
 
+# -----------------------------
+# 强制下载最新脚本
+# -----------------------------
+echo "🔹 检查最新部署脚本..."
+curl -sSL "$DEPLOY_URL" -o "$TMP_SCRIPT"
+chmod +x "$TMP_SCRIPT"
+
+# 如果下载的脚本和当前脚本内容不同，则执行最新脚本
+if ! cmp -s "$TMP_SCRIPT" "$CURRENT_SCRIPT"; then
+    echo "🔹 检测到新版本部署脚本，自动执行最新版本..."
+    exec "$TMP_SCRIPT" "$@"
+fi
+
+# -----------------------------
+# ArgoCD Namespace & GitLab Namespace
+# -----------------------------
 echo "🔹 ArgoCD 应用: $ARGO_APP"
 echo "🔹 ArgoCD Namespace: $ARGO_NAMESPACE"
 echo "🔹 GitLab 部署 Namespace: $DEPLOY_NAMESPACE"
 
-# -----------------------------
-# 检查 ArgoCD Namespace
-# -----------------------------
-if ! kubectl get ns "$ARGO_NAMESPACE" >/dev/null 2>&1; then
-    echo "❌ ArgoCD namespace '$ARGO_NAMESPACE' 不存在"
-    exit 1
-fi
-
-# -----------------------------
-# 创建 GitLab Namespace
-# -----------------------------
-if ! kubectl get ns "$DEPLOY_NAMESPACE" >/dev/null 2>&1; then
-    echo "🔹 创建部署命名空间: $DEPLOY_NAMESPACE"
-    kubectl create ns "$DEPLOY_NAMESPACE"
-fi
+kubectl get ns "$ARGO_NAMESPACE" >/dev/null 2>&1 || { echo "❌ ArgoCD namespace 不存在"; exit 1; }
+kubectl get ns "$DEPLOY_NAMESPACE" >/dev/null 2>&1 || kubectl create ns "$DEPLOY_NAMESPACE"
 
 # -----------------------------
 # 生成 ArgoCD Application YAML
@@ -42,7 +54,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: ''       # 空仓库，自包含
+    repoURL: ''
     path: ''
     targetRevision: ''
   destination:
@@ -53,17 +65,11 @@ spec:
       prune: true
       selfHeal: true
 EOF
-
-echo "🔹 临时 ArgoCD Application YAML: $TMP_APP"
-
-# -----------------------------
-# Apply ArgoCD Application
-# -----------------------------
 kubectl apply -f "$TMP_APP"
 echo "🔹 ArgoCD Application 已创建"
 
 # -----------------------------
-# 生成 Deployment + Service YAML (在 gitlab namespace)
+# 生成 Deployment + Service YAML
 # -----------------------------
 TMP_DEPLOY=$(mktemp)
 cat <<EOF > "$TMP_DEPLOY"
@@ -103,28 +109,18 @@ spec:
   type: ClusterIP
 EOF
 
-echo "🔹 Deployment + Service YAML: $TMP_DEPLOY"
-
-# -----------------------------
-# Apply Deployment/Service
-# -----------------------------
-kubectl apply -f "$TMP_DEPLOY"
+kubectl apply -n "$DEPLOY_NAMESPACE" -f "$TMP_DEPLOY"
 echo "🔹 Deployment + Service 已创建"
 
 # -----------------------------
-# 等待 ArgoCD 应用同步 + 健康检查
+# 等待 ArgoCD Application 同步
 # -----------------------------
 ELAPSED=0
 while [[ $ELAPSED -lt $TIMEOUT ]]; do
     STATUS=$(kubectl -n "$ARGO_NAMESPACE" get app "$ARGO_APP" -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "Unknown")
     HEALTH=$(kubectl -n "$ARGO_NAMESPACE" get app "$ARGO_APP" -o jsonpath='{.status.health.status}' 2>/dev/null || echo "Unknown")
     echo "⏱ 状态: $STATUS | 健康: $HEALTH"
-    
-    if [[ "$STATUS" == "Synced" && "$HEALTH" == "Healthy" ]]; then
-        echo "✅ ArgoCD 应用同步完成并健康"
-        exit 0
-    fi
-
+    [[ "$STATUS" == "Synced" && "$HEALTH" == "Healthy" ]] && { echo "✅ ArgoCD 应用同步完成"; exit 0; }
     sleep 5
     ELAPSED=$((ELAPSED + 5))
 done
