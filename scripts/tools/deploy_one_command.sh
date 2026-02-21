@@ -16,22 +16,22 @@ if [ -z "$GITLAB_PAT" ]; then
     exit 1
 fi
 
-# ===== 创建 ServiceAccount =====
+# ===== 创建/更新 ServiceAccount =====
 SA_NAME="gitlab-deployer-sa"
 echo "🔹 创建/更新 ServiceAccount $SA_NAME ..."
 kubectl -n "$ARGOCD_NAMESPACE" create serviceaccount "$SA_NAME" --dry-run=client -o yaml | kubectl apply -f -
 kubectl -n "$ARGOCD_NAMESPACE" create rolebinding "$SA_NAME-binding" --clusterrole=admin --serviceaccount="$ARGOCD_NAMESPACE:$SA_NAME" --dry-run=client -o yaml | kubectl apply -f -
 
-# ===== 获取 admin 密码 =====
-ADMIN_PASS=$(kubectl -n "$ARGOCD_NAMESPACE" get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d)
-echo "🔹 使用 admin 登录 ArgoCD 获取 token ..."
-argocd login "$ARGOCD_SERVER" --username admin --password "$ADMIN_PASS" --insecure >/dev/null
-
 # ===== 为 ServiceAccount 生成 ArgoCD token =====
-ARGOCD_AUTH_TOKEN=$(argocd account generate-token --account "$SA_NAME")
+echo "🔹 为 $SA_NAME 生成 ArgoCD token ..."
+ARGOCD_AUTH_TOKEN=$(argocd account generate-token --account "$SA_NAME" 2>/dev/null)
+if [ -z "$ARGOCD_AUTH_TOKEN" ]; then
+    echo "⚠️  token 生成失败，尝试使用 kubectl create token ..."
+    ARGOCD_AUTH_TOKEN=$(kubectl -n "$ARGOCD_NAMESPACE" create token "$SA_NAME" --duration=8760h 2>/dev/null)
+fi
 echo "🔹 Token 前20字符: ${ARGOCD_AUTH_TOKEN:0:20} ..."
 
-# ===== 添加仓库到 ArgoCD REST API =====
+# ===== 添加仓库到 ArgoCD =====
 echo "🔹 添加仓库 $REPO_URL 到 ArgoCD ..."
 cat > /tmp/repo.json <<EOF
 {
