@@ -31,14 +31,14 @@
 
 ```bash
 curl -L \
-  https://raw.githubusercontent.com/your-org/your-repo/main/test/scripts/deploy/deploy_argocd_app_UnitTest.sh \
-  -o deploy_argocd_app_UnitTest.sh
+   https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/test/scripts/gitlab/deploy_gitlab_to_argocd_UnitTest.sh \
+  -o deploy_gitlab_to_argocd_UnitTest.sh
 ```
 
 赋予执行权限：
 
 ```bash
-chmod +x deploy_argocd_app_UnitTest.sh
+chmod +x deploy_gitlab_to_argocd_UnitTest.sh
 ```
 
 准备 Kubernetes 测试环境：确保有一个 ArgoCD namespace，确保 ArgoCD server 部署完成，可使用 `kind` 或 `minikube` 创建临时集群。
@@ -58,7 +58,7 @@ export TIMEOUT=60
 ### 2️⃣ 执行测试
 
 ```bash
-./deploy_argocd_app_UnitTest.sh
+./deploy_gitlab_to_argocd_UnitTest.sh
 ```
 
 测试脚本内部会：检查 ArgoCD namespace 和 server，创建或更新 Application，等待同步完成，输出日志和同步结果。
