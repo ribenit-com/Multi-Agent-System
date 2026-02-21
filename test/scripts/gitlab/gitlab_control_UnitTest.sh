@@ -2,7 +2,7 @@
 set -euo pipefail
 
 #########################################
-# GitLab YAML 生成脚本单元测试（最终版，方案3）
+# GitLab YAML 生成脚本单元测试（最终版，gb_ 前缀）
 #########################################
 
 EXEC_SCRIPT="gitlab_yaml_gen_UnitTest.sh"
@@ -11,7 +11,7 @@ TARGET_SCRIPT="gitlab_yaml_gen.sh"
 EXEC_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/test/scripts/gitlab/create_gitlab_yaml_UnitTest.sh"
 TARGET_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/01gitlab/create_gitlab_yaml.sh"
 
-VERSION="v1.0.1"   # 手动维护
+VERSION="v1.0.2"
 
 #########################################
 # 日志函数
@@ -49,14 +49,13 @@ fail() { echo "❌ FAIL: $1"; exit 1; }
 pass() { echo "✅ PASS"; }
 assert_file_exists() { [ -f "$1" ] || fail "File $1 not found"; pass; }
 assert_file_contains() { grep -q "$2" "$1" || fail "File $1 does not contain '$2'"; pass; }
-assert_equal() { [[ "$1" == "$2" ]] || fail "expected=$1 actual=$2"; pass; }
 
 #########################################
 # 测试环境准备（固定独立目录）
 #########################################
 TEST_DIR="/mnt/truenas/Gitlab_yaml_test_run"
 mkdir -p "$TEST_DIR"
-MODULE="GitLab_Test"
+MODULE="gb"            # 固定前缀
 export HOME="$TEST_DIR"
 log "📂 单测生成目录: $TEST_DIR"
 
