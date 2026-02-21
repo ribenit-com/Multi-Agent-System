@@ -28,18 +28,14 @@ ARGOCD_PASSWORD=$(kubectl -n "$ARGOCD_NAMESPACE" get secret argocd-initial-admin
 
 # ===== 登录 ArgoCD 并生成 token =====
 echo "🔹 登录 ArgoCD 并生成 API token ..."
-ARGOCD_TOKEN=$(argocd login "$ARGOCD_SERVER" \
+argocd login "$ARGOCD_SERVER" \
     --username admin \
     --password "$ARGOCD_PASSWORD" \
     --insecure \
-    --grpc-web \
-    --output=json \
-    | jq -r '.token')
+    --grpc-web
 
-if [ -z "$ARGOCD_TOKEN" ]; then
-    echo "❌ 生成 ArgoCD token 失败"
-    exit 1
-fi
+ARGOCD_TOKEN=$(argocd account generate-token --account admin)
+
 echo "🔹 Token 前20字符: ${ARGOCD_TOKEN:0:20} ..."
 
 # ===== 添加仓库到 ArgoCD =====
