@@ -1,72 +1,47 @@
 #!/bin/bash
 # ===================================================
-# GitLab -> ArgoCD 一键部署脚本 v2.0
+# 一键部署 GitLab/GitHub 仓库到 ArgoCD v2.1
 # 功能：
-#   - 下载最新 deploy_gitlab_to_argocd_.sh
-#   - 自动创建 ServiceAccount + ArgoCD token
-#   - 打印生成的 token
-#   - 所有 ArgoCD CLI 命令使用 token 登录
-#   - 完全无人值守
+#   - 创建 ServiceAccount + ArgoCD token
+#   - 打印 token
+#   - 自动配置仓库到 ArgoCD（使用 token 登录）
 # ===================================================
 set -euo pipefail
 
-# ====== 配置区 ======
-GITLAB_USER="${GITLAB_USER:-zuandilong@gmail.com}"
-GITLAB_PAT="${GITLAB_PAT:-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}"
-REPO_URL="${REPO_URL:-https://gitlab.com/ribenit-com/Multi-Agent-k8s-gitops-postgres.git}"
-REPO_PATH="${REPO_PATH:-gitlab-gitops}"
+# 配置区
+GITLAB_USER="${GITLAB_USER:-ribenit-com}"
+GITLAB_PAT="${GITLAB_PAT:-<YOUR_NEW_GITHUB_TOKEN>}"
+REPO_URL="${REPO_URL:-https://github.com/ribenit-com/Multi-Agent-k8s-gitops-postgres.git}"
 ARGO_APP="${ARGO_APP:-gitlab}"
 ARGO_NAMESPACE="${ARGO_NAMESPACE:-argocd}"
 DEPLOY_NAMESPACE="${DEPLOY_NAMESPACE:-ns-gitlab-ha}"
-TIMEOUT="${TIMEOUT:-900}"  # 等待 15 分钟
 ARGOCD_SERVER="${ARGOCD_SERVER:-192.168.1.10:30100}"
 
-# ====== 临时工作目录 ======
+# 临时工作目录
 WORK_DIR=$(mktemp -d)
 cd "$WORK_DIR" || exit
 echo "🔹 工作目录: $WORK_DIR"
 
-# ====== 1️⃣ 下载最新部署脚本 ======
-RUN_SCRIPT="deploy_gitlab_to_argocd_.sh"
-RUN_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/01gitlab/deploy_gitlab_to_argocd_.sh"
-echo "🔹 下载最新部署脚本..."
-curl -sSL "$RUN_URL" -o "$RUN_SCRIPT"
-chmod +x "$RUN_SCRIPT"
-echo "✅ 最新部署脚本已下载: $RUN_SCRIPT"
-
-# ====== 2️⃣ 创建 ServiceAccount + token ======
+# 创建 ServiceAccount + token
 SA_NAME="gitlab-deployer-sa"
 echo "🔹 创建 ServiceAccount $SA_NAME 并生成 token..."
 kubectl -n "$ARGO_NAMESPACE" create serviceaccount "$SA_NAME" --dry-run=client -o yaml | kubectl apply -f -
 kubectl -n "$ARGO_NAMESPACE" create rolebinding "$SA_NAME-binding" --clusterrole=admin --serviceaccount="$ARGO_NAMESPACE:$SA_NAME" --dry-run=client -o yaml | kubectl apply -f -
-
 ARGOCD_AUTH_TOKEN=$(kubectl -n "$ARGO_NAMESPACE" create token "$SA_NAME")
 export ARGOCD_AUTH_TOKEN
 echo "✅ 自动生成 token 并导出环境变量"
 
-# 🔹 打印生成的 ArgoCD token
+# 打印 token
 echo "🔹 ArgoCD ServiceAccount token:"
 echo "$ARGOCD_AUTH_TOKEN"
 echo "----------------------------"
 
-# ====== 3️⃣ 配置 ArgoCD 仓库凭证（使用 token） ======
+# 配置仓库到 ArgoCD（使用 token 登录）
 echo "🔹 配置 ArgoCD 仓库凭证..."
 if argocd --server "$ARGOCD_SERVER" --auth-token "$ARGOCD_AUTH_TOKEN" repo list | grep -q "$(basename "$REPO_URL")"; then
-    argocd --server "$ARGOCD_SERVER" --auth-token "$ARGOCD_AUTH_TOKEN" repo update "$REPO_URL" --username "$GITLAB_USER" --password "$GITLAB_PAT"
+    argocd --server "$ARGOCD_SERVER" --auth-token "$ARGOCD_AUTH_TOKEN" repo update "$REPO_URL" --username "$GITLAB_USER" --password "$GITLAB_PAT" --insecure
 else
-    argocd --server "$ARGOCD_SERVER" --auth-token "$ARGOCD_AUTH_TOKEN" repo add "$REPO_URL" --username "$GITLAB_USER" --password "$GITLAB_PAT" --name "$ARGO_APP"
+    argocd --server "$ARGOCD_SERVER" --auth-token "$ARGOCD_AUTH_TOKEN" repo add "$REPO_URL" --username "$GITLAB_USER" --password "$GITLAB_PAT" --name "$ARGO_APP" --insecure
 fi
 
-# ====== 4️⃣ 执行部署脚本（使用 token） ======
-echo "🔹 执行部署脚本..."
-ARGO_APP="$ARGO_APP" \
-ARGO_NAMESPACE="$ARGO_NAMESPACE" \
-DEPLOY_NAMESPACE="$DEPLOY_NAMESPACE" \
-REPO_URL="$REPO_URL" \
-REPO_PATH="$REPO_PATH" \
-TIMEOUT="$TIMEOUT" \
-ARGOCD_SERVER="$ARGOCD_SERVER" \
-ARGOCD_AUTH_TOKEN="$ARGOCD_AUTH_TOKEN" \
-./"$RUN_SCRIPT"
-
-echo "🎉 GitLab -> ArgoCD 自动部署完成"
+echo "🎉 仓库已成功配置到 ArgoCD，使用 token 登录完成部署准备"
