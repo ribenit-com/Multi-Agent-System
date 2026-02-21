@@ -1,29 +1,55 @@
 #!/bin/bash
-# GitLab -> ArgoCD 部署单体测试脚本（修正版）
+# ===================================================
+# GitLab -> ArgoCD 部署单体测试脚本（新版）
+# ===================================================
 set -euo pipefail
 
+# -----------------------------
+# 可配置变量
+# -----------------------------
 WORK_DIR=$(mktemp -d)
 LOG_FILE="$WORK_DIR/test_run.log"
-cd "$WORK_DIR" || exit
+DEPLOY_SCRIPT="./deploy_gitlab_to_argocd_.sh"
 
 echo "🔹 工作目录: $WORK_DIR"
+echo "🔹 日志文件: $LOG_FILE"
 
-# 下载部署脚本
-RUN_SCRIPT="deploy_gitlab_to_argocd_.sh"
-RUN_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/scripts/01gitlab/deploy_gitlab_to_argocd_.sh"
+# -----------------------------
+# 检查部署脚本是否存在
+# -----------------------------
+if [[ ! -f "$DEPLOY_SCRIPT" ]]; then
+    echo "❌ 部署脚本 $DEPLOY_SCRIPT 不存在，请先放置自包含部署脚本"
+    exit 1
+fi
 
-echo "🔹 下载部署脚本..."
-curl -sSL "$RUN_URL" -o "$RUN_SCRIPT"
-chmod +x "$RUN_SCRIPT"
+chmod +x "$DEPLOY_SCRIPT"
 
-# 执行部署脚本
+# -----------------------------
+# 执行部署脚本并记录日志
+# -----------------------------
 echo "🔹 执行部署脚本..."
-if ./"$RUN_SCRIPT" 2>&1 | tee "$LOG_FILE"; then
+if "$DEPLOY_SCRIPT" 2>&1 | tee "$LOG_FILE"; then
     echo "✅ 部署脚本执行完成"
 else
     echo "❌ 部署脚本执行失败，请查看日志: $LOG_FILE"
     exit 1
 fi
 
-echo "🔹 测试完成"
-exit 0
+# -----------------------------
+# 验证 ArgoCD 应用状态
+# -----------------------------
+ARGO_APP="${ARGO_APP:-gitlab}"
+ARGO_NAMESPACE="${ARGO_NAMESPACE:-argocd}"
+
+STATUS=$(kubectl -n "$ARGO_NAMESPACE" get app "$ARGO_APP" -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "Unknown")
+HEALTH=$(kubectl -n "$ARGO_NAMESPACE" get app "$ARGO_APP" -o jsonpath='{.status.health.status}' 2>/dev/null || echo "Unknown")
+
+echo "🔹 最终状态: Sync=$STATUS | Health=$HEALTH"
+
+if [[ "$STATUS" == "Synced" && "$HEALTH" == "Healthy" ]]; then
+    echo "✅ UnitTest 验证通过，应用已同步且健康"
+    exit 0
+else
+    echo "❌ UnitTest 验证失败，应用未同步或不健康"
+    exit 1
+fi
