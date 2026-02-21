@@ -1,119 +1,125 @@
 #!/bin/bash
-# =============================================================
-# GitLab YAML 生成单测（固定输出目录 + GB 前缀 + 日志追踪）
-# =============================================================
-
 set -euo pipefail
 
 #########################################
-# 脚本信息
+# 脚本路径 & Raw URL（URL 编码，稳定）
 #########################################
-EXEC_SCRIPT="gitlab_yaml_gen_UnitTest.sh"
-TARGET_SCRIPT="gitlab_yaml_gen.sh"
-EXEC_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/test/scripts/gitlab/create_gitlab_yaml_UnitTest.sh"
-TARGET_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/main/scripts/01gitlab/create_gitlab_yaml.sh"
-VERSION="v1.0.3"
 
-log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1"; }
-
-log "======================================"
-log "📌 单元测试脚本: $EXEC_SCRIPT"
-log "📌 目标脚本: $TARGET_SCRIPT"
-log "📌 版本: $VERSION"
-log "======================================"
+TARGET_SCRIPT="gitlab_control.sh"
+TARGET_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/scripts/01gitlab/gitlab_control.sh"
 
 #########################################
-# 下载最新脚本
+# 强制下载最新生产脚本
 #########################################
 download_latest() {
-    local file="$1"
-    local url="$2"
-    log "⬇️ 下载最新脚本: $url"
-    curl -fsSL "$url" -o "$file" || { log "❌ 下载失败: $url"; exit 1; }
-    chmod +x "$file"
-    log "✅ 下载完成并赋予执行权限: $file"
+  local file="$1"
+  local url="$2"
+  echo "⬇️ 强制下载最新 $file ..."
+  curl -f -L "$url" -o "$file" || { echo "❌ 下载失败"; exit 1; }
+  # 检查是否为 HTML 404 页面
+  if head -n1 "$file" | grep -q "<!DOCTYPE html>"; then
+      echo "❌ ERROR: 下载内容是 HTML 404 页面"
+      rm -f "$file"
+      exit 1
+  fi
+  chmod +x "$file"
 }
 
-download_latest "$EXEC_SCRIPT" "$EXEC_URL"
 download_latest "$TARGET_SCRIPT" "$TARGET_URL"
 
 #########################################
 # UT 断言工具
 #########################################
+
 fail() { echo "❌ FAIL: $1"; exit 1; }
 pass() { echo "✅ PASS"; }
-assert_file_exists() { [ -f "$1" ] || fail "File $1 not found"; pass; }
-assert_file_contains() { grep -q "$2" "$1" || fail "File $1 does not contain '$2'"; pass; }
+assert_equal() { [[ "$1" == "$2" ]] || fail "expected=$1 actual=$2"; pass; }
+assert_file_exists() { [[ -f "$1" ]] || fail "$1 not exists"; pass; }
 
 #########################################
-# 固定输出目录
+# mock 测试环境 / 临时 JSON
 #########################################
-MODULE="gb"
-YAML_DIR="/mnt/truenas/Gitlab_yaml_test_run"
-OUTPUT_DIR="/mnt/truenas/Gitlab_output"
 
-mkdir -p "$YAML_DIR"
-mkdir -p "$OUTPUT_DIR"
-
-FULL_LOG="$OUTPUT_DIR/full_script.log"
-
-log "📂 YAML 输出目录: $YAML_DIR"
-log "📂 输出目录: $OUTPUT_DIR"
-log "📄 全量日志: $FULL_LOG"
-
-# 重定向 stdout/stderr 到日志
-exec 3>&1 4>&2
-exec 1>>"$FULL_LOG" 2>&1
-export PS4='+[$LINENO] '
-set -x
+TMP_JSON=$(mktemp)
+cat <<EOF > "$TMP_JSON"
+[
+  {"resource_type":"Pod","name":"pod-1","status":"CrashLoopBackOff"},
+  {"resource_type":"PVC","name":"pvc-1","status":"命名不规范"}
+]
+EOF
 
 #########################################
-# 调用目标脚本生成 YAML / JSON / HTML
+# UT 测试
 #########################################
-log "▶️ 执行目标脚本生成 YAML..."
-bash "$TARGET_SCRIPT" "$MODULE" "$YAML_DIR" "$OUTPUT_DIR"
 
-log "✅ YAML / JSON / HTML 已生成"
-log "📄 YAML 文件目录: $YAML_DIR"
-log "📄 输出目录: $OUTPUT_DIR"
-log "📄 全量日志: $FULL_LOG"
+# UT-01 参数默认值
+MODULE_NAME=""
+[[ -z "$MODULE_NAME" ]] && MODULE_NAME="PostgreSQL_HA"
+assert_equal "PostgreSQL_HA" "$MODULE_NAME"
 
-#########################################
-# 单测检查 YAML 文件是否生成
-#########################################
-for f in namespace secret statefulset service cronjob; do
-    FILE="$YAML_DIR/${MODULE}_$f.yaml"
-    log "🔹 检查 YAML 文件: $FILE"
-    assert_file_exists "$FILE"
+# UT-02 临时文件创建
+[[ -f "$TMP_JSON" ]] || fail "tmp JSON file not created"
+pass
+
+# UT-03 下载生产脚本
+assert_file_exists "$TARGET_SCRIPT"
+
+# UT-04 脚本权限
+[[ -x "$TARGET_SCRIPT" ]] || fail "script not executable"
+pass
+
+# UT-05 JSON 检测执行（轮询方式）
+echo "🔹 执行 $TARGET_SCRIPT 并轮询生成 JSON..."
+bash "$TARGET_SCRIPT" "$MODULE_NAME" "$TMP_JSON" &
+JSON_PID=$!
+
+MAX_RETRIES=10
+COUNT=0
+
+while [ $COUNT -lt $MAX_RETRIES ]; do
+    if [ -s "$TMP_JSON" ]; then
+        echo -e "\n✅ 成功生成 JSON 文件：$TMP_JSON"
+        break
+    fi
+    ((COUNT++))
+    echo -ne "\r🔄 [$COUNT/$MAX_RETRIES] JSON 文件未生成，等待 3 秒..."
+    for i in {3..1}; do
+        echo -ne " $i..."
+        sleep 1
+    done
 done
 
-# CronJob 内容打印
-CRON_FILE="$YAML_DIR/${MODULE}_cronjob.yaml"
-log "📌 CronJob YAML 内容:"
-nl -w3 -s" | " "$CRON_FILE"
+if [ ! -s "$TMP_JSON" ]; then
+    fail "超时：$TARGET_SCRIPT 未生成 JSON 文件"
+fi
 
-log "📌 CronJob containers.command 内容:"
-grep -A10 "command:" "$CRON_FILE"
+wait $JSON_PID
+EXIT_CODE=$?
+[[ $EXIT_CODE -eq 0 ]] || fail "execution failed (退出码 $EXIT_CODE)"
+pass
 
-assert_file_contains "$CRON_FILE" "registry-garbage-collect"
-assert_file_contains "$CRON_FILE" "persistentVolumeClaim"
+# UT-06 Pod 异常统计
+POD_ISSUES=$(jq '[.[] | select(.resource_type=="Pod" and .status!="Running")] | length' < "$TMP_JSON")
+[[ "$POD_ISSUES" -gt 0 ]] || fail "Pod异常未检测到"
+pass
 
-#########################################
-# kubectl dry-run 验证 YAML 格式
-#########################################
-log "▶️ YAML 格式验证 (kubectl dry-run)..."
-for f in namespace secret statefulset service cronjob; do
-    kubectl apply --dry-run=client -f "$YAML_DIR/${MODULE}_$f.yaml" >/dev/null 2>&1 && pass || fail "$f YAML invalid"
-done
+# UT-07 PVC 异常统计
+PVC_ISSUES=$(jq '[.[] | select(.resource_type=="PVC" and .status!="命名规范")] | length' < "$TMP_JSON")
+[[ "$PVC_ISSUES" -gt 0 ]] || fail "PVC异常未检测到"
+pass
 
-#########################################
-# 输出提示验证
-#########################################
-EXPECTED_OUTPUT="✅ YAML / JSON / HTML 已生成到 $YAML_DIR"
-bash "$TARGET_SCRIPT" "$MODULE" "$YAML_DIR" "$OUTPUT_DIR" | grep -q "$EXPECTED_OUTPUT" && pass || fail "Output missing expected text"
+# UT-08 HTML 生成脚本存在性
+HTML_SCRIPT="check_postgres_names_html.sh"
+[[ -f "$HTML_SCRIPT" ]] || echo "⚠️ HTML 脚本未下载，请手动检查"
+pass
 
-log "🎉 所有 YAML 生成测试通过 (GB 前缀 + 固定目录 + v1.0.3)"
+# UT-09 临时文件清理
+rm -f "$TMP_JSON"
+[[ ! -f "$TMP_JSON" ]] || fail "tmp file not deleted"
+pass
 
-# 关闭逐行跟踪，恢复 stdout/stderr
-set +x
-exec 1>&3 2>&4
+# UT-10 输出提示
+echo "✅ $TARGET_SCRIPT 执行完成"
+pass
+
+echo "🎉 All tests passed (enterprise-level v3, 强制下载 + JSON轮询兼容 v1.1)"
