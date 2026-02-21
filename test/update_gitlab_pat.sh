@@ -15,7 +15,7 @@ GITLAB_USER="zuandilong@gmail.com"
 REPO_URL="https://github.com/ribenit-com/Multi-Agent-System.git"
 
 # Personal Access Token (PAT)
-GITLAB_PAT="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"
+GITLAB_PAT="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"
 
 # 临时存放认证信息
 CRED_HELPER="store"  # 或 "cache" 根据需求
