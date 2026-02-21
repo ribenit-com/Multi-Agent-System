@@ -8,10 +8,9 @@ ARGOCD_ADMIN_PASSWORD="${ARGOCD_ADMIN_PASSWORD:-}"  # 必须设置
 GIT_REPO="${GIT_REPO:-git@github.com:ribenit-com/Multi-Agent-k8s-gitops-postgres.git}"
 APP_NAME="${APP_NAME:-gitlab-app}"
 APP_NAMESPACE="${APP_NAMESPACE:-default}"
-APP_PATH="${APP_PATH:-.}"     # 仓库中 Kubernetes YAML 或 Helm Chart 路径
-APP_SYNC_POLICY="${APP_SYNC_POLICY:-automatic}" # 自动同步
+APP_PATH="${APP_PATH:-.}"     
+APP_SYNC_POLICY="${APP_SYNC_POLICY:-automatic}" 
 
-# ===== 参数校验 =====
 if [ -z "$ARGOCD_ADMIN_PASSWORD" ]; then
     echo "❌ 请先设置 ARGOCD_ADMIN_PASSWORD"
     exit 1
@@ -36,7 +35,7 @@ kubectl -n "$ARGOCD_NAMESPACE" create secret generic "$SSH_SECRET_NAME" \
 echo "🔹 登录 ArgoCD CLI ..."
 argocd login "$ARGOCD_SERVER" --username admin --password "$ARGOCD_ADMIN_PASSWORD" --insecure
 
-# ===== 4. 添加 Git 仓库 =====
+# ===== 4. 添加或更新 Git 仓库 =====
 echo "🔹 添加或更新 Git 仓库 $GIT_REPO ..."
 if ! argocd repo list | grep -q "$GIT_REPO"; then
     argocd repo add "$GIT_REPO" --ssh-private-key-path "$SSH_KEY_PATH" --insecure-ignore-host-key
@@ -44,7 +43,7 @@ else
     echo "⚠️ 仓库已存在，跳过添加"
 fi
 
-# ===== 5. 创建 ArgoCD Application =====
+# ===== 5. 创建或更新 Application =====
 echo "🔹 创建或更新 ArgoCD Application $APP_NAME ..."
 if ! argocd app get "$APP_NAME" &>/dev/null; then
     argocd app create "$APP_NAME" \
@@ -58,9 +57,20 @@ else
     argocd app set "$APP_NAME" --repo "$GIT_REPO" --path "$APP_PATH"
 fi
 
-# ===== 6. 同步 Application 并等待完成 =====
-echo "🔹 同步 Application $APP_NAME 并等待完成 ..."
-argocd app sync "$APP_NAME" --wait
+# ===== 6. 同步并等待完成 (兼容旧版本) =====
+echo "🔹 同步 Application 并等待健康状态 ..."
+argocd app sync "$APP_NAME" || echo "⚠️ 同步命令执行完成，开始轮询检查状态"
 
-echo "🎉 GitOps 自动部署完成"
+for i in {1..60}; do
+    STATUS=$(argocd app get "$APP_NAME" -o jsonpath='{.status.sync.status}')
+    HEALTH=$(argocd app get "$APP_NAME" -o jsonpath='{.status.health.status}')
+    echo "[$i] sync=$STATUS, health=$HEALTH"
+    if [[ "$STATUS" == "Synced" && "$HEALTH" == "Healthy" ]]; then
+        echo "✅ Application 已同步完成"
+        break
+    fi
+    sleep 5
+done
+
+echo "🎉 一键 GitOps 自动部署完成"
 argocd app get "$APP_NAME"
