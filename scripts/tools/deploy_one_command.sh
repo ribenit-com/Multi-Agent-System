@@ -1,94 +1,116 @@
 #!/bin/bash
 set -euo pipefail
 
-# ===== 配置区 =====
-ARGOCD_SERVER="${ARGOCD_SERVER:-192.168.1.10:30100}"
-ARGOCD_NAMESPACE="${ARGOCD_NAMESPACE:-argocd}"
-ARGOCD_ADMIN_PASSWORD="${ARGOCD_ADMIN_PASSWORD:-}"
+#########################################
+# 配置参数
+#########################################
+ARGO_SERVER="${ARGO_SERVER:-192.168.1.10:30100}"
+ARGO_ADMIN_USER="${ARGO_ADMIN_USER:-admin}"
+ARGO_ADMIN_PASSWORD="${ARGOCD_ADMIN_PASSWORD:-jiahong565}"
+ARGO_APP="${ARGO_APP:-gitlab-app}"
 GIT_REPO_SSH="${GIT_REPO_SSH:-git@github.com:ribenit-com/Multi-Agent-k8s-gitops-postgres.git}"
-APP_NAME="${APP_NAME:-gitlab-app}"
-SSH_SECRET_NAME="${SSH_SECRET_NAME:-ssh-gitlab}"
-GITHUB_USER="${GITHUB_USER:-ribenit-com}"
-GITHUB_PAT="${GITHUB_PAT:-}"
+GIT_REPO_NAME="${GIT_REPO_NAME:-gitlab}"
+NAMESPACE="${NAMESPACE:-default}"
+SYNC_PATH="${SYNC_PATH:-.}"
 
-# ===== 检查必要参数 =====
-if [ -z "$ARGOCD_ADMIN_PASSWORD" ]; then
-    echo "❌ 错误: 请设置 ARGOCD_ADMIN_PASSWORD 环境变量"
-    exit 1
-fi
-if [ -z "$GITHUB_PAT" ]; then
-    echo "❌ 错误: 请设置 GITHUB_PAT 环境变量"
-    exit 1
-fi
-
-# ===== 创建/更新 ServiceAccount =====
+#########################################
+# 1️⃣ 创建/更新 ServiceAccount
+#########################################
 echo "🔹 创建/更新 ServiceAccount gitlab-deployer-sa ..."
-kubectl -n "$ARGOCD_NAMESPACE" create serviceaccount gitlab-deployer-sa --dry-run=client -o yaml | kubectl apply -f -
-kubectl -n "$ARGOCD_NAMESPACE" create rolebinding gitlab-deployer-sa-binding --clusterrole=admin --serviceaccount="$ARGOCD_NAMESPACE:gitlab-deployer-sa" --dry-run=client -o yaml | kubectl apply -f -
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: gitlab-deployer-sa
+  namespace: $NAMESPACE
+EOF
 
-# ===== 生成 SSH Key (如果不存在) =====
+kubectl apply -f - <<EOF
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: gitlab-deployer-sa-binding
+  namespace: $NAMESPACE
+subjects:
+  - kind: ServiceAccount
+    name: gitlab-deployer-sa
+roleRef:
+  kind: ClusterRole
+  name: admin
+  apiGroup: rbac.authorization.k8s.io
+EOF
+
+#########################################
+# 2️⃣ 创建/更新 ArgoCD SSH Secret
+#########################################
 SSH_KEY="$HOME/.ssh/id_ed25519_argocd"
-if [ ! -f "$SSH_KEY" ]; then
-    echo "🔹 生成 SSH Key..."
-    ssh-keygen -t ed25519 -f "$SSH_KEY" -N "" -C "argocd-deploy"
+if [[ ! -f "$SSH_KEY" ]]; then
+    echo "🔹 生成 SSH Key ..."
+    ssh-keygen -t ed25519 -C "argocd-deploy" -f "$SSH_KEY" -N ""
 fi
 
-# ===== 上传公钥到 GitHub =====
-PUB_KEY=$(cat "$SSH_KEY.pub")
-echo "🔹 上传公钥到 GitHub..."
-curl -s -X POST \
-    -H "Authorization: token $GITHUB_PAT" \
-    -H "Accept: application/vnd.github+json" \
-    https://api.github.com/user/keys \
-    -d "{\"title\":\"argocd-deploy-$(date +%s)\",\"key\":\"$PUB_KEY\"}"
+echo "🔹 创建/更新 ArgoCD SSH Secret: ssh-gitlab ..."
+kubectl -n argocd apply -f - <<EOF
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ssh-gitlab
+  namespace: argocd
+stringData:
+  sshPrivateKey: |
+$(sed 's/^/    /' "$SSH_KEY")
+EOF
 
-# ===== 创建/更新 ArgoCD SSH Secret =====
-echo "🔹 创建/更新 ArgoCD SSH Secret: $SSH_SECRET_NAME ..."
-kubectl -n "$ARGOCD_NAMESPACE" create secret generic "$SSH_SECRET_NAME" \
-    --from-file=sshPrivateKey="$SSH_KEY" \
-    --from-file=sshPublicKey="$SSH_KEY.pub" \
-    --dry-run=client -o yaml | kubectl apply -f -
+#########################################
+# 3️⃣ 登录 ArgoCD CLI
+#########################################
+echo "🔹 登录 ArgoCD..."
+argocd login "$ARGO_SERVER" --username "$ARGO_ADMIN_USER" --password "$ARGO_ADMIN_PASSWORD" --insecure
 
-# ===== 登录 ArgoCD CLI =====
-echo "🔹 登录 ArgoCD CLI ..."
-argocd login "$ARGOCD_SERVER" --username admin --password "$ARGOCD_ADMIN_PASSWORD" --insecure
-
-# ===== 添加或更新 Git 仓库 =====
+#########################################
+# 4️⃣ 添加或更新 Git 仓库
+#########################################
 echo "🔹 添加或更新 Git 仓库 $GIT_REPO_SSH ..."
 if argocd repo list | grep -q "$GIT_REPO_SSH"; then
     echo "⚠️ 仓库已存在，跳过添加"
 else
-    argocd repo add "$GIT_REPO_SSH" --ssh-private-key-path "$SSH_KEY" --name gitlab
+    argocd repo add "$GIT_REPO_SSH" --ssh-private-key-path "$SSH_KEY" --name "$GIT_REPO_NAME"
 fi
 
-# ===== 创建或更新 Application =====
-echo "🔹 创建或更新 Application $APP_NAME ..."
-if argocd app get "$APP_NAME" &>/dev/null; then
+#########################################
+# 5️⃣ 创建或更新 Application
+#########################################
+echo "🔹 创建或更新 Application $ARGO_APP ..."
+if argocd app get "$ARGO_APP" >/dev/null 2>&1; then
     echo "⚠️ Application 已存在，更新配置"
-    argocd app set "$APP_NAME" --repo "$GIT_REPO_SSH" --path "." --dest-namespace default --dest-server https://kubernetes.default.svc
+    argocd app set "$ARGO_APP" --repo "$GIT_REPO_SSH" --path "$SYNC_PATH" --dest-namespace "$NAMESPACE" --dest-server https://kubernetes.default.svc
 else
-    argocd app create "$APP_NAME" \
+    argocd app create "$ARGO_APP" \
         --repo "$GIT_REPO_SSH" \
-        --path "." \
-        --dest-namespace default \
+        --path "$SYNC_PATH" \
+        --dest-namespace "$NAMESPACE" \
         --dest-server https://kubernetes.default.svc \
         --sync-policy automated
 fi
 
-# ===== 同步 Application 并轮询状态 =====
-echo "🔹 同步 Application $APP_NAME 并轮询状态..."
-argocd app sync "$APP_NAME" || echo "⚠️ 同步命令完成，开始轮询"
-
+#########################################
+# 6️⃣ 同步 Application 并等待完成
+#########################################
+echo "🔹 同步 Application $ARGO_APP 并等待完成..."
 for i in {1..60}; do
-    JSON=$(argocd app get "$APP_NAME" -o json)
-    STATUS=$(echo "$JSON" | jq -r '.status.sync.status // ""')
-    HEALTH=$(echo "$JSON" | jq -r '.status.health.status // ""')
+    APP_JSON=$(argocd app get "$ARGO_APP" --output json || echo "{}")
+    STATUS=$(echo "$APP_JSON" | jq -r '.status.sync.status // empty')
+    HEALTH=$(echo "$APP_JSON" | jq -r '.status.health.status // empty')
     echo "[$i] sync=$STATUS, health=$HEALTH"
     if [[ "$STATUS" == "Synced" && "$HEALTH" == "Healthy" ]]; then
-        echo "✅ Application 已同步完成"
+        echo "✅ Application 同步完成"
         break
     fi
     sleep 5
 done
 
-echo "🎉 一键 GitOps 自动部署完成"
+if [[ "$STATUS" != "Synced" || "$HEALTH" != "Healthy" ]]; then
+    echo "⚠️ Application 同步未完成或健康异常，请检查 ArgoCD 控制台"
+fi
+
+echo "🎉 一键部署完成"
