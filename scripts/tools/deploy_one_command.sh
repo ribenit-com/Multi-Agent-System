@@ -1,63 +1,61 @@
 #!/bin/bash
 set -euo pipefail
 
-# ===== 配置 =====
+# ===== 配置区 =====
 ARGOCD_SERVER="${ARGOCD_SERVER:-192.168.1.10:30100}"
 ARGOCD_NAMESPACE="${ARGOCD_NAMESPACE:-argocd}"
-ARGOCD_ADMIN_USER="${ARGOCD_ADMIN_USER:-admin}"
-ARGOCD_ADMIN_PASSWORD="${ARGOCD_ADMIN_PASSWORD:-}"  # 必须 export
+ARGOCD_ADMIN_PASSWORD="${ARGOCD_ADMIN_PASSWORD:-}"
 GIT_REPO_SSH="${GIT_REPO_SSH:-git@github.com:ribenit-com/Multi-Agent-k8s-gitops-postgres.git}"
 APP_NAME="${APP_NAME:-gitlab-app}"
-APP_PATH="${APP_PATH:-.}"
-APP_PROJECT="${APP_PROJECT:-default}"
-APP_DEST_SERVER="${APP_DEST_SERVER:-https://kubernetes.default.svc}"
-APP_DEST_NAMESPACE="${APP_DEST_NAMESPACE:-default}"
-SSH_KEY_PATH="${SSH_KEY_PATH:-$HOME/.ssh/id_ed25519_argocd}"
+SSH_SECRET_NAME="${SSH_SECRET_NAME:-ssh-gitlab}"
 
-# ===== 检查参数 =====
+# ===== 检查必要参数 =====
 if [ -z "$ARGOCD_ADMIN_PASSWORD" ]; then
-    echo "❌ 请设置 ARGOCD_ADMIN_PASSWORD 环境变量"
+    echo "❌ 错误: 请设置 ARGOCD_ADMIN_PASSWORD 环境变量"
+    echo "   例如: export ARGOCD_ADMIN_PASSWORD='你的密码'"
     exit 1
 fi
 
-# ===== 登录 ArgoCD CLI =====
-echo "🔹 登录 ArgoCD..."
-argocd login "$ARGOCD_SERVER" --username "$ARGOCD_ADMIN_USER" --password "$ARGOCD_ADMIN_PASSWORD" --insecure
+echo "🔹 创建/更新 ServiceAccount gitlab-deployer-sa ..."
+kubectl -n "$ARGOCD_NAMESPACE" create serviceaccount gitlab-deployer-sa --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n "$ARGOCD_NAMESPACE" create rolebinding gitlab-deployer-sa-binding --clusterrole=admin --serviceaccount="$ARGOCD_NAMESPACE:gitlab-deployer-sa" --dry-run=client -o yaml | kubectl apply -f -
 
-# ===== 添加或更新 Git 仓库 =====
+echo "🔹 创建/更新 ArgoCD SSH Secret: $SSH_SECRET_NAME ..."
+kubectl -n "$ARGOCD_NAMESPACE" create secret generic "$SSH_SECRET_NAME" \
+    --from-file=sshPrivateKey="$HOME/.ssh/id_ed25519_argocd" \
+    --from-file=sshPublicKey="$HOME/.ssh/id_ed25519_argocd.pub" \
+    --dry-run=client -o yaml | kubectl apply -f -
+
+echo "🔹 登录 ArgoCD CLI ..."
+argocd login "$ARGOCD_SERVER" --username admin --password "$ARGOCD_ADMIN_PASSWORD" --insecure
+
 echo "🔹 添加或更新 Git 仓库 $GIT_REPO_SSH ..."
 if argocd repo list | grep -q "$GIT_REPO_SSH"; then
     echo "⚠️ 仓库已存在，跳过添加"
 else
-    argocd repo add "$GIT_REPO_SSH" --ssh-private-key-path "$SSH_KEY_PATH"
+    argocd repo add "$GIT_REPO_SSH" --ssh-private-key-path "$HOME/.ssh/id_ed25519_argocd" --name gitlab
 fi
 
-# ===== 创建或更新 ArgoCD Application =====
 echo "🔹 创建或更新 Application $APP_NAME ..."
-if argocd app get "$APP_NAME" >/dev/null 2>&1; then
+if argocd app get "$APP_NAME" &>/dev/null; then
     echo "⚠️ Application 已存在，更新配置"
-    argocd app set "$APP_NAME" \
-        --repo "$GIT_REPO_SSH" \
-        --path "$APP_PATH" \
-        --dest-server "$APP_DEST_SERVER" \
-        --dest-namespace "$APP_DEST_NAMESPACE" \
-        --project "$APP_PROJECT"
+    argocd app set "$APP_NAME" --repo "$GIT_REPO_SSH" --path "." --dest-namespace default --dest-server https://kubernetes.default.svc
 else
     argocd app create "$APP_NAME" \
         --repo "$GIT_REPO_SSH" \
-        --path "$APP_PATH" \
-        --dest-server "$APP_DEST_SERVER" \
-        --dest-namespace "$APP_DEST_NAMESPACE" \
-        --project "$APP_PROJECT"
+        --path "." \
+        --dest-namespace default \
+        --dest-server https://kubernetes.default.svc \
+        --sync-policy automated
 fi
 
-# ===== 同步 Application 并轮询 =====
-echo "🔹 同步 Application $APP_NAME 并等待完成..."
-argocd app sync "$APP_NAME" || echo "⚠️ 同步命令执行完成，开始轮询检查状态"
+echo "🔹 同步 Application $APP_NAME 并轮询状态..."
+argocd app sync "$APP_NAME" || echo "⚠️ 同步命令完成，开始轮询"
 
 for i in {1..60}; do
-    STATUS=$(argocd app get "$APP_NAME" -o jsonpath='{.status.sync.status}' || echo "")
-    HEALTH=$(argocd app get "$APP_NAME" -o jsonpath='{.status.health.status}' || echo "")
+    JSON=$(argocd app get "$APP_NAME" -o json)
+    STATUS=$(echo "$JSON" | jq -r '.status.sync.status // ""')
+    HEALTH=$(echo "$JSON" | jq -r '.status.health.status // ""')
     echo "[$i] sync=$STATUS, health=$HEALTH"
     if [[ "$STATUS" == "Synced" && "$HEALTH" == "Healthy" ]]; then
         echo "✅ Application 已同步完成"
@@ -65,11 +63,5 @@ for i in {1..60}; do
     fi
     sleep 5
 done
-
-# ===== 输出状态 =====
-echo "🔹 当前仓库列表:"
-argocd repo list
-echo "🔹 Application 状态:"
-argocd app get "$APP_NAME"
 
 echo "🎉 一键部署完成"
