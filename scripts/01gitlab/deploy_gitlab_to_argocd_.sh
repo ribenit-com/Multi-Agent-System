@@ -1,28 +1,40 @@
 #!/bin/bash
 # ===================================================
-# GitLab -> ArgoCD 部署脚本（完全自包含版本）
+# GitLab -> ArgoCD 部署脚本（仓库修正版）
 # ===================================================
 set -euo pipefail
 
+# -----------------------------
+# 配置变量
+# -----------------------------
 ARGO_APP="${ARGO_APP:-gitlab}"
 ARGO_NAMESPACE="${ARGO_NAMESPACE:-argocd}"
-TIMEOUT="${TIMEOUT:-300}"   
-DEPLOY_NAMESPACE="${DEPLOY_NAMESPACE:-gitlab}"  
+TIMEOUT="${TIMEOUT:-300}"   # 等待 5 分钟
+DEPLOY_NAMESPACE="${DEPLOY_NAMESPACE:-gitlab}"  # GitLab 部署的命名空间
 
 echo "🔹 ArgoCD 应用: $ARGO_APP"
 echo "🔹 ArgoCD Namespace: $ARGO_NAMESPACE"
 echo "🔹 GitLab 部署 Namespace: $DEPLOY_NAMESPACE"
 
+# -----------------------------
+# 检查 ArgoCD 命名空间
+# -----------------------------
 if ! kubectl get ns "$ARGO_NAMESPACE" >/dev/null 2>&1; then
     echo "❌ ArgoCD namespace '$ARGO_NAMESPACE' 不存在"
     exit 1
 fi
 
+# -----------------------------
+# 创建部署命名空间（如果不存在）
+# -----------------------------
 if ! kubectl get ns "$DEPLOY_NAMESPACE" >/dev/null 2>&1; then
     echo "🔹 创建部署命名空间: $DEPLOY_NAMESPACE"
     kubectl create ns "$DEPLOY_NAMESPACE"
 fi
 
+# -----------------------------
+# 生成自包含 YAML
+# -----------------------------
 TMP_MANIFEST=$(mktemp)
 cat <<EOF > "$TMP_MANIFEST"
 apiVersion: argoproj.io/v1alpha1
@@ -33,7 +45,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: ''
+    repoURL: ''  # 空仓库，自包含
     path: ''
     targetRevision: ''
   destination:
@@ -82,9 +94,15 @@ EOF
 
 echo "🔹 临时 YAML 文件生成: $TMP_MANIFEST"
 
+# -----------------------------
+# 应用到 ArgoCD
+# -----------------------------
 kubectl apply -n "$ARGO_NAMESPACE" -f "$TMP_MANIFEST"
 echo "🔹 已提交部署"
 
+# -----------------------------
+# 循环等待同步 + 健康检查
+# -----------------------------
 ELAPSED=0
 while [[ $ELAPSED -lt $TIMEOUT ]]; do
     STATUS=$(kubectl -n "$ARGO_NAMESPACE" get app "$ARGO_APP" -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "Unknown")
