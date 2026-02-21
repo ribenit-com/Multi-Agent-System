@@ -52,12 +52,13 @@ assert_file_contains() { grep -q "$2" "$1" || fail "File $1 does not contain '$2
 assert_equal() { [[ "$1" == "$2" ]] || fail "expected=$1 actual=$2"; pass; }
 
 #########################################
-# 测试环境准备
+# 测试环境准备（固定目录版）
 #########################################
-TEST_DIR=$(mktemp -d)
+TEST_DIR="/mnt/truenas/Gitlab_yaml_test"
+mkdir -p "$TEST_DIR"
 MODULE="GitLab_Test"
 export HOME="$TEST_DIR"
-log "📂 测试临时目录: $TEST_DIR"
+log "📂 测试目录: $TEST_DIR"
 
 #########################################
 # 运行目标脚本生成 YAML
