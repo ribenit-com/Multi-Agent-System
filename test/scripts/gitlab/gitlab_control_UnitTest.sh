@@ -2,7 +2,7 @@
 set -euo pipefail
 
 #########################################
-# GitLab YAML 生成脚本单元测试（增强版日志追踪，方案3）
+# GitLab YAML 生成脚本单元测试（最终版，方案3）
 #########################################
 
 EXEC_SCRIPT="gitlab_yaml_gen_UnitTest.sh"
@@ -52,7 +52,7 @@ assert_file_contains() { grep -q "$2" "$1" || fail "File $1 does not contain '$2
 assert_equal() { [[ "$1" == "$2" ]] || fail "expected=$1 actual=$2"; pass; }
 
 #########################################
-# 测试环境准备（固定独立目录版）
+# 测试环境准备（固定独立目录）
 #########################################
 TEST_DIR="/mnt/truenas/Gitlab_yaml_test_run"
 mkdir -p "$TEST_DIR"
@@ -61,13 +61,16 @@ export HOME="$TEST_DIR"
 log "📂 单测生成目录: $TEST_DIR"
 
 #########################################
-# 运行目标脚本生成 YAML
+# 运行目标脚本生成 YAML / JSON / HTML
 #########################################
 log "▶️ 执行目标脚本生成 YAML..."
-bash "$TARGET_SCRIPT" "$MODULE" "$TEST_DIR" "ns-test-gitlab" "sc-fast" "50Gi" "gitlab/gitlab-ce:15.0" "gitlab.test.local" "192.168.50.10" "35050" "30022" "30080"
+bash "$TARGET_SCRIPT" "$MODULE" "$TEST_DIR" "ns-test-gitlab" "sc-fast" "50Gi" \
+    "gitlab/gitlab-ce:15.0" "gitlab.test.local" "192.168.50.10" "35050" "30022" "30080"
+
+log "✅ YAML / JSON / HTML 已生成"
 
 #########################################
-# UT 测试
+# UT 测试 YAML 文件
 #########################################
 log "▶️ 检查 Namespace YAML..."
 assert_file_exists "$TEST_DIR/${MODULE}_namespace.yaml"
@@ -102,14 +105,19 @@ grep -A10 "command:" "$CRON_FILE"
 assert_file_contains "$CRON_FILE" "registry-garbage-collect"
 assert_file_contains "$CRON_FILE" "persistentVolumeClaim"
 
+#########################################
+# YAML 格式验证 (kubectl dry-run)
+#########################################
 log "▶️ YAML 格式验证 (kubectl dry-run)..."
 for f in namespace secret statefulset service cronjob; do
     kubectl apply --dry-run=client -f "$TEST_DIR/${MODULE}_$f.yaml" >/dev/null 2>&1 && pass || fail "$f YAML invalid"
 done
 
+#########################################
+# 输出提示验证（方案3）
+#########################################
 log "▶️ 输出提示验证..."
-# 方案3: 只匹配部分文本，不依赖目录
-EXPECTED_OUTPUT="✅ GitLab YAML 已生成到"
+EXPECTED_OUTPUT="✅ YAML / JSON / HTML 已生成"
 bash "$TARGET_SCRIPT" "$MODULE" "$TEST_DIR" | grep -q "$EXPECTED_OUTPUT" && pass || fail "Output missing expected text"
 
 log "🎉 所有 YAML 生成测试通过 (enterprise-level v1)"
