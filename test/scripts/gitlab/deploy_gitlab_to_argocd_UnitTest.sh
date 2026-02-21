@@ -4,9 +4,6 @@
 # ===================================================
 set -euo pipefail
 
-# -----------------------------
-# 可配置变量
-# -----------------------------
 WORK_DIR=$(mktemp -d)
 LOG_FILE="$WORK_DIR/test_run.log"
 DEPLOY_SCRIPT="./deploy_gitlab_to_argocd_.sh"
@@ -14,19 +11,13 @@ DEPLOY_SCRIPT="./deploy_gitlab_to_argocd_.sh"
 echo "🔹 工作目录: $WORK_DIR"
 echo "🔹 日志文件: $LOG_FILE"
 
-# -----------------------------
-# 检查部署脚本是否存在
-# -----------------------------
 if [[ ! -f "$DEPLOY_SCRIPT" ]]; then
-    echo "❌ 部署脚本 $DEPLOY_SCRIPT 不存在，请先放置自包含部署脚本"
+    echo "❌ 部署脚本 $DEPLOY_SCRIPT 不存在"
     exit 1
 fi
 
 chmod +x "$DEPLOY_SCRIPT"
 
-# -----------------------------
-# 执行部署脚本并记录日志
-# -----------------------------
 echo "🔹 执行部署脚本..."
 if "$DEPLOY_SCRIPT" 2>&1 | tee "$LOG_FILE"; then
     echo "✅ 部署脚本执行完成"
@@ -35,9 +26,6 @@ else
     exit 1
 fi
 
-# -----------------------------
-# 验证 ArgoCD 应用状态
-# -----------------------------
 ARGO_APP="${ARGO_APP:-gitlab}"
 ARGO_NAMESPACE="${ARGO_NAMESPACE:-argocd}"
 
