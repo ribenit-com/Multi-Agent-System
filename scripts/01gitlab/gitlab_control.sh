@@ -5,9 +5,9 @@ SCRIPT_VERSION="v1.1.0"
 CREATED_TIME=$(date +"%H:%M:%S")
 
 #########################################
-# 固定 MODULE = gb
+# 固定 MODULE = gitlab
 #########################################
-MODULE="gb"
+MODULE="gitlab"
 
 #########################################
 OUTPUT_DIR="/mnt/truenas/Gitlab_output"
