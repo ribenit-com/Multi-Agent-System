@@ -6,4 +6,6 @@
 
 
 
-argocd login  192.168.1.10:30100 --username admin --password 'jiahong565' --insecure
+argocd login 192.168.1.10:30100 --username admin --password 'jiahong565' --insecure
+argocd login 192.168.1.10:30100 --username admin --password jiahong565 --insecure
+
