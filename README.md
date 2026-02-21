@@ -3,6 +3,7 @@ sudo apt update
 sudo apt install -y postgresql-client
 需要单独安装的工具组：　
 postgresql-client
+ArgoCD CLI
 
 
 🛠️ 进阶建议：如何让它对 AI 更友好？
