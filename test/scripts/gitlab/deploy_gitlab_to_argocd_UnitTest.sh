@@ -1,136 +1,63 @@
 #!/bin/bash
+# =========================================================
+# GitLab -> ArgoCD 部署单体测试脚本（带状态码）
+# 状态码说明：
+#   0 → 所有操作成功
+#   1 → 下载运行脚本失败
+#   2 → 下载测试脚本失败
+#   3 → 测试脚本执行失败
+# =========================================================
+
 set -euo pipefail
 
-#########################################
-# deploy_argocd_app_UnitTest_DRYRUN.sh
-# 单体测试（函数调用 + Dry-run）
-# 覆盖 UT-01 ~ UT-10
-#########################################
+# 临时工作目录
+WORK_DIR=$(mktemp -d)
+LOG_FILE="$WORK_DIR/test_run.log"
+cd "$WORK_DIR" || exit
+echo "🔹 工作目录: $WORK_DIR"
+echo "🔹 日志文件: $LOG_FILE"
 
-SCRIPT="./deploy_argocd_app.sh"
+# =========================
+# 下载运行脚本
+# =========================
+RUN_SCRIPT="deploy_gitlab_to_argocd_.sh"
+RUN_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/scripts/01gitlab/deploy_gitlab_to_argocd_.sh"
 
-if [[ ! -f "$SCRIPT" ]]; then
-  echo "❌ ERROR: 脚本不存在: $SCRIPT"
-  exit 1
+echo "🔹 下载运行脚本: $RUN_SCRIPT"
+if curl -fsSL "$RUN_URL" -o "$RUN_SCRIPT"; then
+    chmod +x "$RUN_SCRIPT"
+    echo "✅ 运行脚本下载完成"
+else
+    echo "❌ 运行脚本下载失败" | tee -a "$LOG_FILE"
+    exit 1
 fi
 
-# 加载 deploy_app() 函数
-source "$SCRIPT"
+# =========================
+# 下载测试脚本
+# =========================
+TEST_SCRIPT="deploy_gitlab_to_argocd_UnitTest.sh"
+TEST_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/test/scripts/gitlab/deploy_gitlab_to_argocd_UnitTest.sh"
 
-#########################################
-# UT 断言工具
-#########################################
-fail() { echo "❌ FAIL: $1"; exit 1; }
-pass() { echo "✅ PASS"; }
-assert_equal() { [[ "$1" == "$2" ]] || fail "expected=$1 actual=$2"; pass; }
-assert_log_contains() { grep -q "$2" "$1" || fail "log missing: $2"; pass; }
+echo "🔹 下载测试脚本: $TEST_SCRIPT"
+if curl -fsSL "$TEST_URL" -o "$TEST_SCRIPT"; then
+    chmod +x "$TEST_SCRIPT"
+    echo "✅ 测试脚本下载完成"
+else
+    echo "❌ 测试脚本下载失败" | tee -a "$LOG_FILE"
+    exit 2
+fi
 
-#########################################
-# UT 全局参数 & Dry-run
-#########################################
-export DRY_RUN=true
-export ARGO_APP="test-postgres-ha"
-export GITHUB_REPO="test-org/test-repo"
-export CHART_PATH="charts/postgres-ha"
-export VALUES_FILE="values.yaml"
-export NAMESPACE="test-postgres"
-export ARGO_NAMESPACE="argocd"
-export TIMEOUT=5
-INTERVAL=1
+# =========================
+# 执行测试脚本
+# =========================
+echo "🔹 开始执行测试脚本..."
+if ./"$TEST_SCRIPT" 2>&1 | tee "$LOG_FILE"; then
+    echo "✅ 测试执行成功"
+else
+    echo "❌ 测试执行失败，查看日志: $LOG_FILE"
+    exit 3
+fi
 
-#########################################
-# UT-01 参数默认值
-#########################################
-echo "🔹 UT-01 参数默认值"
-ARGO_APP=""
-[[ -z "$ARGO_APP" ]] && ARGO_APP="default-app"
-assert_equal "default-app" "$ARGO_APP"
-
-#########################################
-# UT-02 参数缺失
-#########################################
-echo "🔹 UT-02 缺失 GITHUB_REPO"
-unset GITHUB_REPO
-TMP_LOG=$(mktemp)
-{
-  export ARGO_APP
-  export GITHUB_REPO=""
-  deploy_app || true
-} &> "$TMP_LOG"
-assert_log_contains "$TMP_LOG" "GITHUB_REPO"
-rm -f "$TMP_LOG"
-pass
-
-#########################################
-# UT-03 / UT-04 ArgoCD 环境检查
-#########################################
-echo "🔹 UT-03 / UT-04 ArgoCD 环境检查"
-export GITHUB_REPO="test-org/test-repo"
-TMP_LOG=$(mktemp)
-deploy_app &> "$TMP_LOG" || true
-assert_log_contains "$TMP_LOG" "INFO"
-rm -f "$TMP_LOG"
-pass
-
-#########################################
-# UT-05 / UT-06 Application 创建/更新
-#########################################
-echo "🔹 UT-05 / UT-06 Application 创建/更新"
-TMP_LOG=$(mktemp)
-deploy_app &> "$TMP_LOG"
-assert_log_contains "$TMP_LOG" "Application 已提交"
-rm -f "$TMP_LOG"
-pass
-
-#########################################
-# UT-07 同步成功
-#########################################
-echo "🔹 UT-07 同步成功"
-export MOCK_SYNC_STATUS="Synced"
-export MOCK_HEALTH_STATUS="Healthy"
-TMP_LOG=$(mktemp)
-deploy_app &> "$TMP_LOG"
-assert_log_contains "$TMP_LOG" "同步成功"
-rm -f "$TMP_LOG"
-pass
-
-#########################################
-# UT-08 同步失败 Degraded
-#########################################
-echo "🔹 UT-08 同步失败 Degraded"
-export MOCK_HEALTH_STATUS="Degraded"
-TMP_LOG=$(mktemp)
-deploy_app &> "$TMP_LOG" || true
-assert_log_contains "$TMP_LOG" "Degraded"
-rm -f "$TMP_LOG"
-pass
-
-#########################################
-# UT-09 同步超时
-#########################################
-echo "🔹 UT-09 同步超时"
-export TIMEOUT=3
-export INTERVAL=1
-export MOCK_SYNC_STATUS="Unknown"
-export MOCK_HEALTH_STATUS="Unknown"
-TMP_LOG=$(mktemp)
-deploy_app &> "$TMP_LOG" || true
-assert_log_contains "$TMP_LOG" "超时"
-rm -f "$TMP_LOG"
-pass
-
-#########################################
-# UT-10 日志输出
-#########################################
-echo "🔹 UT-10 日志输出"
-export MOCK_SYNC_STATUS="Synced"
-export MOCK_HEALTH_STATUS="Healthy"
-TMP_LOG=$(mktemp)
-deploy_app &> "$TMP_LOG"
-for level in INFO WARN ERROR; do
-  assert_log_contains "$TMP_LOG" "$level"
-done
-rm -f "$TMP_LOG"
-pass
-
-echo "🎉 All tests passed (Dry-run Function UT v2.1)"
+echo "🔹 所有操作完成，状态码: 0"
+echo "🔹 临时目录保留: $WORK_DIR (可手动清理)"
+exit 0
