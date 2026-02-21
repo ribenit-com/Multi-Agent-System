@@ -1,8 +1,6 @@
 #!/bin/bash
 # =============================================================
 # GitLab YAML + JSON + HTML 生成脚本（固定输出目录版）
-# YAML_DIR -> 放 YAML 和 yaml_list.json
-# OUTPUT_DIR -> 放日志和 HTML
 # =============================================================
 
 set -euo pipefail
@@ -16,14 +14,12 @@ OUTPUT_DIR="/mnt/truenas/Gitlab_output"
 mkdir -p "$YAML_DIR"
 mkdir -p "$OUTPUT_DIR"
 
-# 全量日志
 FULL_LOG="$OUTPUT_DIR/full_script.log"
 
 # JSON / HTML 输出
 JSON_FILE="$YAML_DIR/yaml_list.json"
 HTML_FILE="$OUTPUT_DIR/postgres_ha_info.html"
 
-# 输出简要信息到终端
 echo "📄 全量日志文件: $FULL_LOG"
 echo "📄 YAML 文件目录: $YAML_DIR"
 echo "📄 输出目录: $OUTPUT_DIR"
