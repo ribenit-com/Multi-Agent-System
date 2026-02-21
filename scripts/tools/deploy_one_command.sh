@@ -1,8 +1,10 @@
+cat > fix_argocd_repo.sh << 'EOF'
 #!/bin/bash
 set -euo pipefail
 
 # ===== 配置区 =====
 ARGOCD_SERVER="${ARGOCD_SERVER:-192.168.1.10:30100}"
+ARGOCD_PASS="${ARGOCD_PASS:-}"  # 需要设置admin密码
 GITLAB_USER="${GITLAB_USER:-ribenit-com}"
 GITLAB_PAT="${GITLAB_PAT:-}"  
 REPO_URL="${REPO_URL:-https://github.com/ribenit-com/Multi-Agent-k8s-gitops-postgres.git}"
@@ -15,25 +17,34 @@ if [ -z "$GITLAB_PAT" ]; then
     exit 1
 fi
 
-# ===== 检查是否已登录 ArgoCD admin =====
-echo "🔹 检查 ArgoCD 登录状态..."
-if ! argocd context get "$ARGOCD_SERVER" >/dev/null 2>&1; then
-    echo "⚠️  尚未登录 ArgoCD admin，请先执行登录命令："
-    echo "   argocd login $ARGOCD_SERVER --username admin --password <ADMIN_PASS> --insecure"
+if [ -z "$ARGOCD_PASS" ]; then
+    echo "❌ 错误: 请设置 ARGOCD_PASS 环境变量 (admin密码)"
+    echo "   例如: export ARGOCD_PASS='your-admin-password'"
     exit 1
 fi
 
-# ===== 生成 admin token =====
-echo "🔹 生成 ArgoCD admin token..."
-ARGOCD_AUTH_TOKEN=$(argocd account generate-token --account admin 2>/dev/null)
-if [ -z "$ARGOCD_AUTH_TOKEN" ]; then
-    echo "❌ admin token 生成失败，请确认已登录 ArgoCD admin"
+echo "🔹 开始添加仓库到 ArgoCD ..."
+
+# ===== 通过API登录获取token =====
+echo "🔹 通过API登录 ArgoCD ..."
+LOGIN_RESPONSE=$(curl -s -k -X POST "https://$ARGOCD_SERVER/api/v1/session" \
+  -H "Content-Type: application/json" \
+  -d "{\"username\":\"admin\",\"password\":\"$ARGOCD_PASS\"}")
+
+# 提取token
+ARGOCD_TOKEN=$(echo "$LOGIN_RESPONSE" | grep -o '"token":"[^"]*"' | cut -d'"' -f4)
+
+if [ -z "$ARGOCD_TOKEN" ]; then
+    echo "❌ ArgoCD 登录失败，请检查密码"
+    echo "响应内容: $LOGIN_RESPONSE"
     exit 1
 fi
-echo "🔹 Token 前20字符: ${ARGOCD_AUTH_TOKEN:0:20} ..."
+echo "🔹 Token 前20字符: ${ARGOCD_TOKEN:0:20} ..."
 
 # ===== 添加仓库到 ArgoCD =====
 echo "🔹 添加仓库 $REPO_URL 到 ArgoCD ..."
+
+# 创建JSON请求体
 cat > /tmp/repo.json <<EOF
 {
   "repo": "$REPO_URL",
@@ -44,9 +55,10 @@ cat > /tmp/repo.json <<EOF
 }
 EOF
 
+# 发送请求
 HTTP_CODE=$(curl -sk -o /tmp/repo_add_result.json -w "%{http_code}" \
      -X POST \
-     -H "Authorization: Bearer $ARGOCD_AUTH_TOKEN" \
+     -H "Authorization: Bearer $ARGOCD_TOKEN" \
      -H "Content-Type: application/json" \
      -d @/tmp/repo.json \
      "https://$ARGOCD_SERVER/api/v1/repositories")
@@ -63,8 +75,9 @@ fi
 
 # ===== 显示当前 ArgoCD 仓库列表 =====
 echo "🔹 当前 ArgoCD 仓库列表:"
-curl -sk -H "Authorization: Bearer $ARGOCD_AUTH_TOKEN" "https://$ARGOCD_SERVER/api/v1/repositories" | jq -r '.items[] | "\(.name) -> \(.repo)"'
+curl -sk -H "Authorization: Bearer $ARGOCD_TOKEN" "https://$ARGOCD_SERVER/api/v1/repositories" | jq -r '.items[] | "\(.repository) -> \(.url)"' 2>/dev/null || echo "  暂无仓库或jq未安装"
 
 echo "🎉 一键添加仓库完成"
-echo "💡 Token 可用于后续 CI/CD 操作:"
-echo "$ARGOCD_AUTH_TOKEN"
+EOF
+
+chmod +x fix_argocd_repo.sh
