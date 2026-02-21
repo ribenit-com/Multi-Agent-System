@@ -9,30 +9,22 @@ GITLAB_PAT="${GITLAB_PAT:-}"
 REPO_URL="${REPO_URL:-https://github.com/ribenit-com/Multi-Agent-k8s-gitops-postgres.git}"
 ARGO_APP="${ARGO_APP:-gitlab}"
 
-# ===== 检查必要参数 =====
+# 检查必要参数
 if [ -z "$GITLAB_PAT" ]; then
-    echo "❌ 错误: 请设置 GITLAB_PAT 环境变量"
-    echo "   例如: export GITLAB_PAT='ghp_xxxx'"
+    echo "❌ 请设置 GITLAB_PAT 环境变量"
     exit 1
 fi
 
-# ===== 创建/更新 ServiceAccount =====
+# 创建/更新 ServiceAccount
 SA_NAME="gitlab-deployer-sa"
-echo "🔹 创建/更新 ServiceAccount $SA_NAME ..."
 kubectl -n "$ARGOCD_NAMESPACE" create serviceaccount "$SA_NAME" --dry-run=client -o yaml | kubectl apply -f -
 kubectl -n "$ARGOCD_NAMESPACE" create rolebinding "$SA_NAME-binding" --clusterrole=admin --serviceaccount="$ARGOCD_NAMESPACE:$SA_NAME" --dry-run=client -o yaml | kubectl apply -f -
 
-# ===== 为 ServiceAccount 生成 ArgoCD token =====
-echo "🔹 为 $SA_NAME 生成 ArgoCD token ..."
-ARGOCD_AUTH_TOKEN=$(argocd account generate-token --account "$SA_NAME" 2>/dev/null)
-if [ -z "$ARGOCD_AUTH_TOKEN" ]; then
-    echo "⚠️  token 生成失败，尝试使用 kubectl create token ..."
-    ARGOCD_AUTH_TOKEN=$(kubectl -n "$ARGOCD_NAMESPACE" create token "$SA_NAME" --duration=8760h 2>/dev/null)
-fi
+# 生成 ServiceAccount token
+ARGOCD_AUTH_TOKEN=$(kubectl -n "$ARGOCD_NAMESPACE" create token "$SA_NAME" --duration=8760h)
 echo "🔹 Token 前20字符: ${ARGOCD_AUTH_TOKEN:0:20} ..."
 
-# ===== 添加仓库到 ArgoCD =====
-echo "🔹 添加仓库 $REPO_URL 到 ArgoCD ..."
+# 添加仓库到 ArgoCD REST API
 cat > /tmp/repo.json <<EOF
 {
   "repo": "$REPO_URL",
@@ -58,10 +50,9 @@ else
     exit 1
 fi
 
-# ===== 显示当前 ArgoCD 仓库列表 =====
-echo "🔹 当前 ArgoCD 仓库列表:"
+# 显示当前仓库列表
 curl -sk -H "Authorization: Bearer $ARGOCD_AUTH_TOKEN" "https://$ARGOCD_SERVER/api/v1/repositories" | jq -r '.items[] | "\(.name) -> \(.repo)"'
 
-echo "🎉 一键添加仓库完成"
+echo "🎉 仓库已成功添加到 ArgoCD"
 echo "💡 Token 可用于后续 CI/CD 操作:"
 echo "$ARGOCD_AUTH_TOKEN"
