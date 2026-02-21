@@ -1,17 +1,15 @@
 #!/bin/bash
 # ===================================================
-# GitLab -> ArgoCD 部署单体测试脚本（强化版）
-# 强制下载最新部署脚本
+# GitLab -> ArgoCD UnitTest（方案1强化版）
 # ===================================================
 set -euo pipefail
 
-# -----------------------------
-# 配置变量
-# -----------------------------
 WORK_DIR=$(mktemp -d)
 LOG_FILE="$WORK_DIR/test_run.log"
 
-# 仓库 URL（部署脚本）
+# -----------------------------
+# 部署脚本 URL
+# -----------------------------
 DEPLOY_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/scripts/01gitlab/deploy_gitlab_to_argocd_.sh"
 DEPLOY_SCRIPT="./deploy_gitlab_to_argocd_.sh"
 
@@ -27,7 +25,7 @@ chmod +x "$DEPLOY_SCRIPT"
 echo "✅ 已下载并设置可执行: $DEPLOY_SCRIPT"
 
 # -----------------------------
-# 执行部署脚本并记录日志
+# 执行部署脚本
 # -----------------------------
 echo "🔹 执行部署脚本..."
 if "$DEPLOY_SCRIPT" 2>&1 | tee "$LOG_FILE"; then
@@ -38,7 +36,7 @@ else
 fi
 
 # -----------------------------
-# 验证 ArgoCD 应用状态
+# 验证 ArgoCD Application 状态
 # -----------------------------
 ARGO_APP="${ARGO_APP:-gitlab}"
 ARGO_NAMESPACE="${ARGO_NAMESPACE:-argocd}"
@@ -49,9 +47,9 @@ HEALTH=$(kubectl -n "$ARGO_NAMESPACE" get app "$ARGO_APP" -o jsonpath='{.status.
 echo "🔹 最终状态: Sync=$STATUS | Health=$HEALTH"
 
 if [[ "$STATUS" == "Synced" && "$HEALTH" == "Healthy" ]]; then
-    echo "✅ UnitTest 验证通过，应用已同步且健康"
+    echo "✅ UnitTest 验证通过"
     exit 0
 else
-    echo "❌ UnitTest 验证失败，应用未同步或不健康"
+    echo "❌ UnitTest 验证失败"
     exit 1
 fi
