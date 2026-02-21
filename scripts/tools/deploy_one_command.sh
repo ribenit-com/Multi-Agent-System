@@ -11,7 +11,7 @@ set -euo pipefail
 
 # ====== 配置区 ======
 GITLAB_USER="${GITLAB_USER:-zuandilong@gmail.com}"
-GITLAB_PAT="${GITLAB_PAT:-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}"
+GITLAB_PAT="${GITLAB_PAT:-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}"
 REPO_URL="${REPO_URL:-https://gitlab.com/ribenit-com/Multi-Agent-k8s-gitops-postgres.git}"
 REPO_PATH="${REPO_PATH:-gitlab-gitops}"
 ARGO_APP="${ARGO_APP:-gitlab}"
