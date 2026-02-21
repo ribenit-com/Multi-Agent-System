@@ -1,6 +1,6 @@
 #!/bin/bash
 # ===================================================
-# GitLab -> ArgoCD 一键部署脚本 v1.9.0
+# GitLab -> ArgoCD 一键部署脚本 v2.0
 # 功能：
 #   - 下载最新 deploy_gitlab_to_argocd_.sh
 #   - 自动创建 ServiceAccount + ArgoCD token
