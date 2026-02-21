@@ -1,29 +1,30 @@
 #!/bin/bash
 # ===================================================
-# GitLab -> ArgoCD 部署单体测试脚本（仓库修正版）
+# GitLab -> ArgoCD 部署单体测试脚本（强化版）
+# 强制下载最新部署脚本
 # ===================================================
 set -euo pipefail
 
 # -----------------------------
-# 临时工作目录 & 日志
+# 配置变量
 # -----------------------------
 WORK_DIR=$(mktemp -d)
 LOG_FILE="$WORK_DIR/test_run.log"
 
-echo "🔹 工作目录: $WORK_DIR"
-echo "🔹 日志文件: $LOG_FILE"
-
-# -----------------------------
-# 部署脚本路径
-# -----------------------------
+# 仓库 URL（部署脚本）
+DEPLOY_URL="https://raw.githubusercontent.com/ribenit-com/Multi-Agent-System/refs/heads/main/scripts/01gitlab/deploy_gitlab_to_argocd_.sh"
 DEPLOY_SCRIPT="./deploy_gitlab_to_argocd_.sh"
 
-if [[ ! -f "$DEPLOY_SCRIPT" ]]; then
-    echo "❌ 部署脚本 $DEPLOY_SCRIPT 不存在，请先上传修正版"
-    exit 1
-fi
+echo "🔹 工作目录: $WORK_DIR"
+echo "🔹 日志文件: $LOG_FILE"
+echo "🔹 强制下载最新部署脚本: $DEPLOY_URL"
 
+# -----------------------------
+# 下载最新部署脚本
+# -----------------------------
+curl -sSL "$DEPLOY_URL" -o "$DEPLOY_SCRIPT"
 chmod +x "$DEPLOY_SCRIPT"
+echo "✅ 已下载并设置可执行: $DEPLOY_SCRIPT"
 
 # -----------------------------
 # 执行部署脚本并记录日志
