@@ -1,12 +1,12 @@
 #!/bin/bash
 # ===================================================
-# GitLab -> ArgoCD 一键部署脚本 v1.8.0
+# GitLab -> ArgoCD 一键部署脚本 v1.9.0
 # 功能：
-#   - 下载最新部署脚本
-#   - 配置 GitLab PAT
-#   - 自动创建 ArgoCD ServiceAccount token
+#   - 下载最新 deploy_gitlab_to_argocd_.sh
+#   - 自动创建 ServiceAccount + ArgoCD token
 #   - 打印生成的 token
 #   - 所有 ArgoCD CLI 命令使用 token 登录
+#   - 完全无人值守
 # ===================================================
 set -euo pipefail
 
@@ -49,7 +49,7 @@ echo "🔹 ArgoCD ServiceAccount token:"
 echo "$ARGOCD_AUTH_TOKEN"
 echo "----------------------------"
 
-# ====== 3️⃣ 配置 ArgoCD 仓库凭证（使用 token 登录） ======
+# ====== 3️⃣ 配置 ArgoCD 仓库凭证（使用 token） ======
 echo "🔹 配置 ArgoCD 仓库凭证..."
 if argocd --server "$ARGOCD_SERVER" --auth-token "$ARGOCD_AUTH_TOKEN" repo list | grep -q "$(basename "$REPO_URL")"; then
     argocd --server "$ARGOCD_SERVER" --auth-token "$ARGOCD_AUTH_TOKEN" repo update "$REPO_URL" --username "$GITLAB_USER" --password "$GITLAB_PAT"
@@ -57,7 +57,7 @@ else
     argocd --server "$ARGOCD_SERVER" --auth-token "$ARGOCD_AUTH_TOKEN" repo add "$REPO_URL" --username "$GITLAB_USER" --password "$GITLAB_PAT" --name "$ARGO_APP"
 fi
 
-# ====== 4️⃣ 执行部署脚本 ======
+# ====== 4️⃣ 执行部署脚本（使用 token） ======
 echo "🔹 执行部署脚本..."
 ARGO_APP="$ARGO_APP" \
 ARGO_NAMESPACE="$ARGO_NAMESPACE" \
