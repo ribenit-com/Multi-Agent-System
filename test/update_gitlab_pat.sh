@@ -9,13 +9,13 @@ set -euo pipefail
 
 # ====== 配置区 ======
 # GitLab 用户名（你的 GitLab 登录用户名或 email）
-GITLAB_USER="your_username"
+GITLAB_USER="zuandilong@gmail.com"
 
 # GitLab 仓库 HTTPS URL（不要包含用户名）
-REPO_URL="https://gitlab.com/namespace/project.git"
+REPO_URL="https://github.com/ribenit-com/Multi-Agent-System.git"
 
 # Personal Access Token (PAT)
-GITLAB_PAT="your_personal_access_token"
+GITLAB_PAT="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"
 
 # 临时存放认证信息
 CRED_HELPER="store"  # 或 "cache" 根据需求
