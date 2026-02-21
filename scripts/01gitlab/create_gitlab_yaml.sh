@@ -1,16 +1,16 @@
 #!/bin/bash
 # =============================================================
-# GitLab YAML + JSON + HTML 生成脚本（固定输出目录 + 单测兼容版）
-# 生成目录: /mnt/truenas/Gitlab_yaml_test_run
+# GitLab YAML + JSON + HTML 生成脚本（可传入输出目录）
 # =============================================================
 
 set -euo pipefail
 
 #########################################
-# 固定目录配置
+# 参数解析
 #########################################
-YAML_DIR="/mnt/truenas/Gitlab_yaml_test_run"
-OUTPUT_DIR="/mnt/truenas/Gitlab_yaml_test_run"
+MODULE="${1:-gb}"                       # 文件前缀
+YAML_DIR="${2:-/mnt/truenas/Gitlab_yaml_output}"   # YAML 输出目录
+OUTPUT_DIR="${3:-/mnt/truenas/Gitlab_output}"     # HTML & 日志输出目录
 
 mkdir -p "$YAML_DIR"
 mkdir -p "$OUTPUT_DIR"
@@ -22,7 +22,9 @@ FULL_LOG="$OUTPUT_DIR/full_script.log"
 JSON_FILE="$YAML_DIR/yaml_list.json"
 HTML_FILE="$OUTPUT_DIR/postgres_ha_info.html"
 
-# 输出简要信息到终端
+#########################################
+# 输出终端信息
+#########################################
 echo "📄 全量日志文件: $FULL_LOG"
 echo "📄 YAML 文件目录: $YAML_DIR"
 echo "📄 输出目录: $OUTPUT_DIR"
@@ -34,11 +36,6 @@ exec 1>>"$FULL_LOG" 2>&1
 # 打开逐行跟踪
 export PS4='+[$LINENO] '
 set -x
-
-#########################################
-# 模块名和文件前缀
-#########################################
-MODULE="GitLab_Test"
 
 #########################################
 # YAML 文件生成函数
@@ -180,10 +177,6 @@ set +x
 # 恢复 stdout/stderr 到终端
 exec 1>&3 2>&4
 
-#########################################
-# ✅ 最终输出（单测匹配）
-#########################################
-echo "✅ YAML / JSON / HTML 已生成"
-echo "✅ GitLab YAML 已生成到 $YAML_DIR"
+echo "✅ YAML / JSON / HTML 已生成到 $YAML_DIR"
 echo "📄 输出目录: $OUTPUT_DIR"
 echo "📄 全量日志: $FULL_LOG"
