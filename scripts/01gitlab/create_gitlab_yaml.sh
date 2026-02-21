@@ -1,6 +1,7 @@
 #!/bin/bash
 # =============================================================
 # GitLab YAML + JSON + HTML 生成脚本（固定输出目录版）
+# 生成目录: /mnt/truenas/Gitlab_yaml_test_run
 # =============================================================
 
 set -euo pipefail
@@ -8,18 +9,20 @@ set -euo pipefail
 #########################################
 # 固定目录配置
 #########################################
-YAML_DIR="/mnt/truenas/Gitlab_yaml_output"
-OUTPUT_DIR="/mnt/truenas/Gitlab_output"
+YAML_DIR="/mnt/truenas/Gitlab_yaml_test_run"
+OUTPUT_DIR="/mnt/truenas/Gitlab_yaml_test_run"
 
 mkdir -p "$YAML_DIR"
 mkdir -p "$OUTPUT_DIR"
 
+# 全量日志
 FULL_LOG="$OUTPUT_DIR/full_script.log"
 
 # JSON / HTML 输出
 JSON_FILE="$YAML_DIR/yaml_list.json"
 HTML_FILE="$OUTPUT_DIR/postgres_ha_info.html"
 
+# 输出简要信息到终端
 echo "📄 全量日志文件: $FULL_LOG"
 echo "📄 YAML 文件目录: $YAML_DIR"
 echo "📄 输出目录: $OUTPUT_DIR"
@@ -35,7 +38,7 @@ set -x
 #########################################
 # 模块名和文件前缀
 #########################################
-MODULE="gb"
+MODULE="GitLab_Test"
 
 #########################################
 # YAML 文件生成函数
