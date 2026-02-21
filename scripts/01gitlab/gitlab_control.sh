@@ -5,14 +5,9 @@ SCRIPT_VERSION="v1.1.0"
 CREATED_TIME=$(date +"%H:%M:%S")
 
 #########################################
-# 必须传 MODULE
+# 固定 MODULE = gb
 #########################################
-MODULE="${1:-}"
-
-if [[ -z "$MODULE" ]]; then
-    echo "❌ 用法: $0 <MODULE>"
-    exit 1
-fi
+MODULE="gb"
 
 #########################################
 OUTPUT_DIR="/mnt/truenas/Gitlab_output"
@@ -42,7 +37,7 @@ log "YAML脚本路径: $YAML_SCRIPT"
 log "============================================"
 
 #########################################
-# 只传 MODULE（修复关键点）
+# 调用 YAML 脚本
 #########################################
 if [[ -x "$YAML_SCRIPT" ]]; then
     if "$YAML_SCRIPT" "$MODULE"; then
