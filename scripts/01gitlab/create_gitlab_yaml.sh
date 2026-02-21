@@ -130,7 +130,7 @@ spec:
 EOF
 
 #########################################
-# JSON 生成（示例）
+# JSON 生成
 #########################################
 JSON_FILE="$OUTPUT_DIR/${MODULE_CLEAN}_info.json"
 
@@ -143,9 +143,9 @@ cat > "$JSON_FILE" <<EOF
 EOF
 
 #########################################
-# HTML 报告生成
+# HTML 报告生成（已修复动态文件名）
 #########################################
-HTML_FILE="$OUTPUT_DIR/postgres_ha_info.html"
+HTML_FILE="$OUTPUT_DIR/${MODULE_CLEAN}_info.html"
 
 cat > "$HTML_FILE" <<EOF
 <html>
