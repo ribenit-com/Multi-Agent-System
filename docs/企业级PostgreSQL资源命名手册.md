@@ -97,6 +97,24 @@
 
 ---
 
+```
+Service命名规范
+缩写-模块名-primary / 缩写-模块名-replica
+
+Namespace
+StatefulSet
+PVC
+Pod
+NetworkPolicy	
+缩写-模块名-ha
+
+ConfigMap
+cm-模块名-config
+
+Secret
+secret-模块名-password
+```
+
 ## 推荐部署顺序（标准化版）
 
 1. 创建 Namespace  
