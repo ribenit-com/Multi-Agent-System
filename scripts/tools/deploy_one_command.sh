@@ -1,92 +1,118 @@
 #!/bin/bash
 set -euo pipefail
 
-# ================= 配置区 =================
+# ===================== 配置区 =====================
 ARGOCD_SERVER="${ARGOCD_SERVER:-192.168.1.10:30100}"
-ARGOCD_NAMESPACE="${ARGOCD_NAMESPACE:-argocd}"
-GITLAB_USER="${GITLAB_USER:-ribenit-com}"
-GITLAB_PAT="${GITLAB_PAT:-}"   # 必须提前 export GITLAB_PAT
+ARGOCD_TOKEN="${ARGOCD_TOKEN:-eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJhcmdvY2QiLCJzdWIiOiJhZG1pbjphcGlLZXkiLCJuYmYiOjE3NzE2ODg4MDUsImlhdCI6MTc3MTY4ODgwNSwianRpIjoiOWVkOTcwZjktNWMwNy00N2IyLTk3OWUtNjExZjUyYjFkNTZiIn0.ItqVg4XhlZJcd_7b0dqKDkH7CGP4gArW5WMuXAW6E-I}"
 REPO_URL="${REPO_URL:-https://github.com/ribenit-com/Multi-Agent-k8s-gitops-postgres.git}"
-ARGO_APP="${ARGO_APP:-gitlab}"  # ArgoCD 中的应用名
+REPO_NAME="${REPO_NAME:-gitlab}"
+ARGO_APP="${ARGO_APP:-gitlab-app}"
+TARGET_NAMESPACE="${TARGET_NAMESPACE:-default}"
 
-# ================= 参数检查 =================
-if [ -z "$GITLAB_PAT" ]; then
-    echo "❌ 错误: 请先设置 GITLAB_PAT 环境变量"
-    echo "   例如: export GITLAB_PAT='ghp_xxxx'"
-    exit 1
-fi
+# Git 仓库凭证（如果是私有仓库）
+GIT_USERNAME="${GIT_USERNAME:-ribenit-com}"
+GIT_PASSWORD="${GIT_PASSWORD:-<你的 GitHub/GitLab Token>}"
 
-# ================= 创建 ServiceAccount =================
-SA_NAME="gitlab-deployer-sa"
-echo "🔹 创建/更新 ServiceAccount $SA_NAME ..."
-kubectl -n "$ARGOCD_NAMESPACE" create serviceaccount "$SA_NAME" --dry-run=client -o yaml | kubectl apply -f -
-kubectl -n "$ARGOCD_NAMESPACE" create rolebinding "$SA_NAME-binding" --clusterrole=admin --serviceaccount="$ARGOCD_NAMESPACE:$SA_NAME" --dry-run=client -o yaml | kubectl apply -f -
+# ===================== 添加仓库 =====================
+echo "🔹 添加 Git 仓库 $REPO_URL 到 ArgoCD ..."
 
-# ================= 生成 ServiceAccount token =================
-echo "🔹 生成 ServiceAccount token ..."
-if ! ARGOCD_AUTH_TOKEN=$(kubectl -n "$ARGOCD_NAMESPACE" create token "$SA_NAME" --duration=8760h 2>/dev/null); then
-    echo "⚠️ token 生成失败，尝试获取已有 secret ..."
-    ARGOCD_AUTH_TOKEN=$(kubectl get secret -n "$ARGOCD_NAMESPACE" | grep "${SA_NAME}-token" | head -1 | xargs -I{} kubectl get secret -n "$ARGOCD_NAMESPACE" {} -o jsonpath='{.data.token}' | base64 -d)
-fi
-echo "🔹 Token 前20字符: ${ARGOCD_AUTH_TOKEN:0:20} ..."
-
-# ================= 添加 Git 仓库到 ArgoCD =================
-echo "🔹 添加仓库 $REPO_URL 到 ArgoCD ..."
 cat > /tmp/repo.json <<EOF
 {
   "repo": "$REPO_URL",
-  "username": "$GITLAB_USER",
-  "password": "$GITLAB_PAT",
-  "name": "$ARGO_APP",
+  "username": "$GIT_USERNAME",
+  "password": "$GIT_PASSWORD",
+  "name": "$REPO_NAME",
   "insecure": true
 }
 EOF
 
-HTTP_CODE=$(curl -sk -o /tmp/repo_add_result.json -w "%{http_code}" \
-     -X POST \
-     -H "Authorization: Bearer $ARGOCD_AUTH_TOKEN" \
-     -H "Content-Type: application/json" \
-     -d @/tmp/repo.json \
-     "https://$ARGOCD_SERVER/api/v1/repositories")
+HTTP_CODE=$(curl -sk -o /tmp/repo_result.json -w "%{http_code}" \
+  -X POST \
+  -H "Authorization: Bearer $ARGOCD_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d @/tmp/repo.json \
+  "https://$ARGOCD_SERVER/api/v1/repositories")
 
 if [ "$HTTP_CODE" -eq 200 ] || [ "$HTTP_CODE" -eq 201 ]; then
-    echo "✅ 仓库添加成功 (HTTP $HTTP_CODE)"
+  echo "✅ 仓库添加成功"
 else
-    # 如果仓库已存在也当成功处理
-    if grep -q "already exists" /tmp/repo_add_result.json; then
-        echo "✅ 仓库已存在，无需重复添加"
-    else
-        echo "❌ 仓库添加失败 (HTTP $HTTP_CODE)"
-        cat /tmp/repo_add_result.json
-        exit 1
-    fi
+  # 如果仓库已经存在，忽略错误
+  if grep -q "already exists" /tmp/repo_result.json; then
+    echo "⚠️ 仓库已存在，跳过"
+  else
+    echo "❌ 仓库添加失败 (HTTP $HTTP_CODE)"
+    cat /tmp/repo_result.json
+    exit 1
+  fi
 fi
 
-# ================= 等待 ArgoCD Application 同步完成 =================
-echo "🔹 等待 ArgoCD Application 同步完成 ..."
-MAX_RETRIES=120   # 最多等待 10 分钟
-SLEEP_SEC=5
+# ===================== 创建应用 =====================
+echo "🔹 创建 ArgoCD 应用 $ARGO_APP ..."
 
-for i in $(seq 1 $MAX_RETRIES); do
-    STATUS=$(kubectl -n argocd get app "$ARGO_APP" -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "Unknown")
-    HEALTH=$(kubectl -n argocd get app "$ARGO_APP" -o jsonpath='{.status.health.status}' 2>/dev/null || echo "Unknown")
-    echo "[$i] sync=$STATUS, health=$HEALTH"
-    if [[ "$STATUS" == "Synced" && "$HEALTH" == "Healthy" ]]; then
-        echo "✅ ArgoCD Application 已同步完成"
-        break
-    fi
-    if [[ "$i" -eq "$MAX_RETRIES" ]]; then
-        echo "⚠️ 超时，Application 可能未同步完成或不健康"
-        exit 1
-    fi
-    sleep $SLEEP_SEC
+cat > /tmp/app.json <<EOF
+{
+  "apiVersion": "argoproj.io/v1alpha1",
+  "kind": "Application",
+  "metadata": {
+    "name": "$ARGO_APP",
+    "namespace": "argocd"
+  },
+  "spec": {
+    "project": "default",
+    "source": {
+      "repoURL": "$REPO_URL",
+      "targetRevision": "HEAD",
+      "path": "."
+    },
+    "destination": {
+      "server": "https://kubernetes.default.svc",
+      "namespace": "$TARGET_NAMESPACE"
+    },
+    "syncPolicy": {
+      "automated": {
+        "prune": true,
+        "selfHeal": true
+      }
+    }
+  }
+}
+EOF
+
+HTTP_CODE=$(curl -sk -o /tmp/app_result.json -w "%{http_code}" \
+  -X POST \
+  -H "Authorization: Bearer $ARGOCD_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d @/tmp/app.json \
+  "https://$ARGOCD_SERVER/api/v1/applications")
+
+if [ "$HTTP_CODE" -eq 200 ] || [ "$HTTP_CODE" -eq 201 ]; then
+  echo "✅ 应用 $ARGO_APP 创建成功"
+else
+  if grep -q "already exists" /tmp/app_result.json; then
+    echo "⚠️ 应用已存在，跳过创建"
+  else
+    echo "❌ 应用创建失败 (HTTP $HTTP_CODE)"
+    cat /tmp/app_result.json
+    exit 1
+  fi
+fi
+
+# ===================== 等待同步 =====================
+echo "🔹 等待应用同步完成 (最长5分钟)..."
+
+for i in {1..60}; do
+  STATUS=$(curl -sk -H "Authorization: Bearer $ARGOCD_TOKEN" \
+    "https://$ARGOCD_SERVER/api/v1/applications/$ARGO_APP" \
+    | jq -r '.status.sync.status')
+  HEALTH=$(curl -sk -H "Authorization: Bearer $ARGOCD_TOKEN" \
+    "https://$ARGOCD_SERVER/api/v1/applications/$ARGO_APP" \
+    | jq -r '.status.health.status')
+  echo "[$i] sync=$STATUS, health=$HEALTH"
+  if [[ "$STATUS" == "Synced" && "$HEALTH" == "Healthy" ]]; then
+    echo "✅ 应用已同步完成"
+    break
+  fi
+  sleep 5
 done
 
-# ================= 显示当前仓库列表 =================
-echo "🔹 当前 ArgoCD 仓库列表:"
-curl -sk -H "Authorization: Bearer $ARGOCD_AUTH_TOKEN" "https://$ARGOCD_SERVER/api/v1/repositories" | jq -r '.items[] | "\(.name) -> \(.repo)"'
-
-# ================= 输出 Token =================
-echo "🎉 一键部署完成"
-echo "💡 Token 可用于后续 CI/CD 操作:"
-echo "$ARGOCD_AUTH_TOKEN"
+echo "🎉 一键部署完成，应用已在 ArgoCD 中注册并同步"
