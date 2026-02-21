@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================
-# GitLab YAML + JSON + HTML 生成脚本（固定输出目录版）
+# GitLab YAML + JSON + HTML 生成脚本（固定输出目录 + 单测兼容版）
 # 生成目录: /mnt/truenas/Gitlab_yaml_test_run
 # =============================================================
 
@@ -180,7 +180,10 @@ set +x
 # 恢复 stdout/stderr 到终端
 exec 1>&3 2>&4
 
+#########################################
+# ✅ 最终输出（单测匹配）
+#########################################
 echo "✅ YAML / JSON / HTML 已生成"
-echo "📄 YAML 文件目录: $YAML_DIR"
+echo "✅ GitLab YAML 已生成到 $YAML_DIR"
 echo "📄 输出目录: $OUTPUT_DIR"
 echo "📄 全量日志: $FULL_LOG"
